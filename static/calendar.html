@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Activity Calendar</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif; }
+    .day-cell { width: 38px; height: 38px; }
+  </style>
+</head>
+<body class="bg-neutral-50 text-neutral-900 min-h-screen">
+  <div class="max-w-6xl mx-auto px-6 py-10">
+    <header class="flex items-center justify-between mb-8">
+      <div>
+        <h1 class="text-3xl font-semibold tracking-tight">Activity Calendar</h1>
+        <p id="summary" class="text-sm text-neutral-500 mt-1">Distinct people you 1:1 messaged each day · group chats excluded</p>
+      </div>
+      <div class="flex items-center gap-4">
+        <label class="text-sm text-neutral-600 flex items-center gap-2">
+          Range:
+          <select id="range" class="px-2 py-1 rounded border border-neutral-300 bg-white text-sm">
+            <option value="365" selected>Last 12 months</option>
+            <option value="180">Last 6 months</option>
+            <option value="90">Last 3 months</option>
+            <option value="730">Last 2 years</option>
+          </select>
+        </label>
+        <a href="/" class="text-sm text-teal-700 hover:underline">← Back to contacts</a>
+      </div>
+    </header>
+
+    <!-- AI insights -->
+    <div id="ai-insights" class="hidden mb-4 rounded-xl bg-gradient-to-br from-violet-50 to-rose-50 border border-violet-200 overflow-hidden">
+      <button id="ai-toggle" class="w-full flex items-center justify-between px-4 py-3 hover:bg-white/30 transition text-left">
+        <div class="flex items-center gap-2">
+          <span class="text-sm font-semibold text-violet-900">AI insights</span>
+          <span id="ai-age" class="text-[11px] text-violet-500"></span>
+        </div>
+        <div class="flex items-center gap-3 text-[11px]">
+          <span id="ai-refresh" class="text-violet-700 hover:underline">↻ regenerate</span>
+          <span id="ai-chevron" class="text-violet-400 text-sm transition-transform">▾</span>
+        </div>
+      </button>
+      <div id="ai-body" class="px-4 pb-4 pt-1">
+        <ul id="ai-insights-list" class="text-sm text-neutral-700 space-y-1.5"></ul>
+      </div>
+    </div>
+
+    <!-- Top stats -->
+    <div id="stats" class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4"></div>
+
+    <!-- Insights panel -->
+    <div id="insights" class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4"></div>
+    <div id="charts" class="space-y-4 mb-6"></div>
+
+    <div id="months" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div class="col-span-full flex items-center justify-center gap-2 p-12 text-neutral-400 text-sm">
+        <svg class="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" opacity="0.25"/><path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+        Loading activity…
+      </div>
+    </div>
+  </div>
+
+  <!-- Day modal -->
+  <div id="day-modal" class="hidden fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl w-full max-w-lg shadow-2xl flex flex-col max-h-[85vh]">
+      <!-- Header -->
+      <div class="p-5 border-b border-neutral-100 flex items-center justify-between gap-3">
+        <div class="min-w-0 flex items-center gap-2">
+          <button id="thread-back" class="hidden text-neutral-500 hover:text-neutral-900 text-base">←</button>
+          <div class="min-w-0">
+            <h2 id="day-modal-title" class="text-lg font-semibold truncate"></h2>
+            <p id="day-modal-sub" class="text-xs text-neutral-500 mt-0.5"></p>
+          </div>
+        </div>
+        <button id="day-close" class="text-neutral-400 hover:text-neutral-700 text-xl leading-none shrink-0">&times;</button>
+      </div>
+      <!-- Day (people) view -->
+      <div id="day-view" class="flex-1 overflow-y-auto divide-y divide-neutral-100 min-h-0"></div>
+      <!-- Thread (messages) view -->
+      <div id="thread-view" class="hidden flex-1 flex-col min-h-0">
+        <div id="thread-messages" class="flex-1 overflow-y-auto px-4 py-3 min-h-0"></div>
+        <div class="px-4 py-2 border-t border-neutral-100 flex items-center justify-between text-[11px] text-neutral-400 shrink-0">
+          <span id="thread-window"></span>
+          <button id="thread-expand" class="text-teal-600 hover:underline">Show more</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const WEEKDAY_HEADERS = ["S", "M", "T", "W", "T", "F", "S"];
+    const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
+                         "July", "August", "September", "October", "November", "December"];
+
+    async function load() {
+      const days = parseInt($("range").value, 10);
+      const data = await fetch(`/api/activity?days=${days}`).then(r => r.json());
+      render(data);
+    }
+
+    function render(days) {
+      if (!days || !days.length) {
+        $("months").innerHTML = `<div class="col-span-full text-center text-neutral-400">No data.</div>`;
+        return;
+      }
+      const maxCount = Math.max(1, ...days.map(d => d.count));
+      const total = days.reduce((s, d) => s + d.count, 0);
+      const active = days.filter(d => d.count > 0).length;
+      const avgPerDay = (total / days.length).toFixed(1);
+      const avgPerActiveDay = active ? (total / active).toFixed(1) : "0";
+
+      $("summary").textContent = `Distinct real people you 1:1 messaged each day · group chats and automated senders (Doordash, banks, etc.) excluded`;
+
+      $("stats").innerHTML = `
+        ${statCard("Avg / day", avgPerDay, "people per day across whole range")}
+        ${statCard("Avg / active day", avgPerActiveDay, "people on days you actually messaged someone")}
+        ${statCard("Active days", `${active} / ${days.length}`, "days with at least one 1:1 message to a real person")}
+        ${statCard("Busiest day", String(maxCount), "most distinct people in a single day")}
+      `;
+
+      renderInsights(days);
+      renderCharts(days);
+
+      // Group by (year, month)
+      const byMonth = new Map();
+      for (const d of days) {
+        const key = d.date.slice(0, 7);
+        if (!byMonth.has(key)) byMonth.set(key, []);
+        byMonth.get(key).push(d);
+      }
+      const monthKeys = [...byMonth.keys()].sort();
+
+      const html = monthKeys.map(key => {
+        const [year, month] = key.split("-").map(Number);
+        const monthName = MONTH_NAMES[month - 1];
+        const monthDays = byMonth.get(key);
+        const byDate = new Map(monthDays.map(d => [d.date, d.count]));
+        const firstOfMonth = new Date(year, month - 1, 1);
+        const lastOfMonth = new Date(year, month, 0);
+        const startWeekday = firstOfMonth.getDay();
+        const daysInMonth = lastOfMonth.getDate();
+        const monthTotal = monthDays.reduce((s, d) => s + d.count, 0);
+        const monthActive = monthDays.filter(d => d.count > 0).length;
+        const monthAvg = monthDays.length ? (monthTotal / monthDays.length).toFixed(1) : "0";
+
+        let cells = "";
+        for (let i = 0; i < startWeekday; i++) {
+          cells += `<div class="day-cell"></div>`;
+        }
+        for (let day = 1; day <= daysInMonth; day++) {
+          const dateStr = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+          const count = byDate.get(dateStr) ?? null;
+          const hasData = count !== null;
+          if (!hasData) {
+            cells += `<div class="day-cell flex flex-col items-center justify-center text-[10px] text-neutral-300">${day}</div>`;
+            continue;
+          }
+          const intensity = count > 0 ? 0.12 + (count / maxCount) * 0.78 : 0;
+          const bg = count > 0 ? `background-color: rgba(13, 148, 136, ${intensity.toFixed(3)});` : "";
+          const textColor = intensity > 0.55 ? "text-white" : "text-neutral-700";
+          const countText = count > 0 ? count : "";
+          const cursor = count > 0 ? "cursor-pointer hover:ring-2 hover:ring-teal-400" : "";
+          cells += `
+            <div class="day-cell rounded relative flex items-center justify-center ${textColor} ${cursor}" style="${bg}" data-date="${dateStr}" data-count="${count}" title="${dateStr} — ${count} ${count === 1 ? 'person' : 'people'}${count > 0 ? ' (click for details)' : ''}">
+              <span class="absolute top-0.5 left-1 text-[9px] opacity-60">${day}</span>
+              <span class="text-sm font-medium">${countText}</span>
+            </div>`;
+        }
+
+        return `
+          <div class="bg-white rounded-xl border border-neutral-200 p-4">
+            <div class="flex items-baseline justify-between mb-1">
+              <h2 class="text-sm font-semibold">${monthName} <span class="text-neutral-400 font-normal">${year}</span></h2>
+              <span class="text-[10px] text-neutral-400">avg ${monthAvg} · ${monthActive} active</span>
+            </div>
+            <div class="grid grid-cols-7 gap-0.5 text-center text-[10px] text-neutral-400 mb-1 mt-2">
+              ${WEEKDAY_HEADERS.map(d => `<div>${d}</div>`).join("")}
+            </div>
+            <div class="grid grid-cols-7 gap-0.5">
+              ${cells}
+            </div>
+          </div>`;
+      }).join("");
+
+      $("months").innerHTML = html;
+
+      // Bind day clicks
+      document.querySelectorAll("[data-date]").forEach(el => {
+        if (parseInt(el.dataset.count, 10) > 0) {
+          el.addEventListener("click", () => openDayModal(el.dataset.date));
+        }
+      });
+    }
+
+    function statCard(label, value, hint) {
+      return `
+        <div class="bg-white rounded-xl border border-neutral-200 p-3" title="${hint}">
+          <div class="text-[10px] uppercase tracking-wide text-neutral-400">${label}</div>
+          <div class="text-xl font-semibold mt-1">${value}</div>
+        </div>`;
+    }
+
+    function renderCharts(days) {
+      if (!days.length) { $("charts").innerHTML = ""; return; }
+      // Group by ISO week (Mon-Sun) and by month; metric = avg distinct people per day in that bucket.
+      const weekly = new Map();
+      const monthly = new Map();
+      for (const d of days) {
+        const dt = new Date(d.date + "T00:00:00");
+        // Monday of this week
+        const wd = dt.getDay();
+        const offset = wd === 0 ? -6 : 1 - wd;
+        const monday = new Date(dt);
+        monday.setDate(dt.getDate() + offset);
+        const wk = monday.toISOString().slice(0, 10);
+        if (!weekly.has(wk)) weekly.set(wk, { sum: 0, n: 0 });
+        const wEntry = weekly.get(wk);
+        wEntry.sum += d.count; wEntry.n += 1;
+
+        const mk = d.date.slice(0, 7);
+        if (!monthly.has(mk)) monthly.set(mk, { sum: 0, n: 0 });
+        const mEntry = monthly.get(mk);
+        mEntry.sum += d.count; mEntry.n += 1;
+      }
+      const monthlyArr = [...monthly.entries()].sort().map(([k, v]) => ({ k, avg: v.sum / v.n, sum: v.sum, n: v.n }));
+      const weeklyArr = [...weekly.entries()].sort().map(([k, v]) => ({ k, avg: v.sum / v.n, sum: v.sum, n: v.n }));
+
+      $("charts").innerHTML = `
+        ${barChart({
+          title: "Avg distinct people per day, by month",
+          entries: monthlyArr,
+          labelFor: e => {
+            const [y, m] = e.k.split("-").map(Number);
+            return MONTH_NAMES[m - 1].slice(0, 3);
+          },
+          subLabelFor: e => `${e.avg.toFixed(1)}/day across ${e.n} days · ${e.sum} people-days total`,
+          color: "#0d9488",
+        })}
+        ${barChart({
+          title: "Avg distinct people per day, by week",
+          entries: weeklyArr,
+          labelFor: e => {
+            const dt = new Date(e.k + "T00:00:00");
+            return `${dt.getMonth() + 1}/${dt.getDate()}`;
+          },
+          subLabelFor: e => `Week of ${e.k}: avg ${e.avg.toFixed(1)}/day`,
+          color: "#7c3aed",
+          showEveryNth: 2,
+        })}
+      `;
+    }
+
+    function barChart({ title, entries, labelFor, subLabelFor, color, showEveryNth = 1 }) {
+      const max = Math.max(...entries.map(e => e.avg), 1);
+      const barW = 22, gap = 4;
+      const chartH = 90;
+      const padTop = 8, padBottom = 18, padLeft = 28;
+      const width = entries.length * (barW + gap) + padLeft + 10;
+      const height = chartH + padTop + padBottom;
+      // Y-axis ticks
+      const yTicks = [];
+      const tickCount = 3;
+      for (let i = 0; i <= tickCount; i++) {
+        const val = (max * i) / tickCount;
+        const y = padTop + chartH - (val / max) * chartH;
+        yTicks.push(`<line x1="${padLeft}" y1="${y}" x2="${width - 4}" y2="${y}" stroke="#f3f4f6" stroke-width="1"/><text x="${padLeft - 4}" y="${y + 3}" text-anchor="end" font-size="9" fill="#a3a3a3">${val.toFixed(0)}</text>`);
+      }
+      const bars = entries.map((e, i) => {
+        const h = (e.avg / max) * chartH;
+        const x = padLeft + i * (barW + gap);
+        const y = padTop + chartH - h;
+        const showLabel = i % showEveryNth === 0;
+        return `<rect x="${x}" y="${y}" width="${barW}" height="${h}" fill="${color}" rx="2" opacity="0.85"><title>${subLabelFor(e)}</title></rect>${showLabel ? `<text x="${x + barW / 2}" y="${height - 4}" text-anchor="middle" font-size="9" fill="#737373">${labelFor(e)}</text>` : ""}`;
+      }).join("");
+      return `
+        <div class="bg-white rounded-xl border border-neutral-200 p-3">
+          <div class="text-[10px] uppercase tracking-wide text-neutral-400 mb-2">${title}</div>
+          <div class="overflow-x-auto"><svg width="${width}" height="${height}">${yTicks.join("")}${bars}</svg></div>
+        </div>`;
+    }
+
+    function renderInsights(days) {
+      const DAY_NAMES = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+      // Day of week averages
+      const dowSum = [0,0,0,0,0,0,0];
+      const dowN = [0,0,0,0,0,0,0];
+      // Weekday vs weekend
+      let wdSum = 0, wdN = 0, weSum = 0, weN = 0;
+      // Month totals
+      const byMonth = new Map();
+      days.forEach(d => {
+        const dt = new Date(d.date + "T00:00:00");
+        const w = dt.getDay();
+        dowSum[w] += d.count;
+        dowN[w]++;
+        if (w === 0 || w === 6) { weSum += d.count; weN++; }
+        else { wdSum += d.count; wdN++; }
+        const mk = d.date.slice(0, 7);
+        byMonth.set(mk, (byMonth.get(mk) || 0) + d.count);
+      });
+      const dowAvg = dowSum.map((s, i) => dowN[i] ? s / dowN[i] : 0);
+      const maxDow = Math.max(...dowAvg, 1);
+      const wdAvg = wdN ? wdSum / wdN : 0;
+      const weAvg = weN ? weSum / weN : 0;
+      const monthEntries = [...byMonth.entries()].sort((a, b) => b[1] - a[1]);
+      const top3Days = [...days].filter(d => d.count > 0).sort((a, b) => b.count - a.count).slice(0, 5);
+      const fmtMonth = key => {
+        const [y, m] = key.split("-").map(Number);
+        return `${MONTH_NAMES[m - 1].slice(0, 3)} ${y}`;
+      };
+      const fmtDate = d => new Date(d + "T00:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+
+      const dowBars = DAY_NAMES.map((n, i) => {
+        const h = Math.max(2, Math.round((dowAvg[i] / maxDow) * 48));
+        const isWeekend = i === 0 || i === 6;
+        return `
+          <div class="flex flex-col items-center gap-1" title="${n}: avg ${dowAvg[i].toFixed(1)} people/day">
+            <div class="text-[9px] text-neutral-400">${dowAvg[i].toFixed(1)}</div>
+            <div class="w-6 ${isWeekend ? 'bg-amber-300' : 'bg-teal-500'} rounded-sm" style="height: ${h}px"></div>
+            <div class="text-[10px] text-neutral-500">${n[0]}</div>
+          </div>`;
+      }).join("");
+
+      $("insights").innerHTML = `
+        <div class="bg-white rounded-xl border border-neutral-200 p-3 md:col-span-3">
+          <div class="text-[10px] uppercase tracking-wide text-neutral-400 mb-2">By day of week</div>
+          <div class="flex items-end justify-around gap-1 h-16">${dowBars}</div>
+          <div class="text-[10px] text-neutral-500 mt-2">Weekday avg <span class="font-medium text-neutral-700">${wdAvg.toFixed(1)}</span> · Weekend avg <span class="font-medium text-neutral-700">${weAvg.toFixed(1)}</span></div>
+        </div>
+      `;
+    }
+
+    let currentDate = null;
+    let currentThread = null;  // { key, name, days }
+
+    function showDayView() {
+      $("day-view").classList.remove("hidden");
+      $("thread-view").classList.add("hidden");
+      $("thread-back").classList.add("hidden");
+      currentThread = null;
+    }
+
+    function showThreadView() {
+      $("day-view").classList.add("hidden");
+      $("thread-view").classList.remove("hidden");
+      $("thread-view").classList.add("flex");
+      $("thread-back").classList.remove("hidden");
+    }
+
+    async function openDayModal(dateStr) {
+      currentDate = dateStr;
+      $("day-modal-title").textContent = new Date(dateStr + "T00:00:00").toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+      $("day-modal-sub").textContent = "Loading…";
+      $("day-view").innerHTML = "";
+      $("day-modal").classList.remove("hidden");
+      showDayView();
+      const data = await fetch(`/api/activity/day/${dateStr}`).then(r => r.json());
+      $("day-modal-sub").textContent = `${data.count} ${data.count === 1 ? "person" : "people"}`;
+      $("day-view").innerHTML = data.people.map(p => {
+        const preview = p.last_text ? (p.last_from_me ? "You: " : "") + p.last_text : "—";
+        const nameCls = p.named ? "text-neutral-900" : "text-amber-700";
+        return `
+          <div class="p-3 cursor-pointer hover:bg-neutral-50" data-key="${escapeHtml(p.key)}" data-name="${escapeHtml(p.name)}">
+            <div class="flex items-baseline justify-between gap-3">
+              <div class="text-sm font-medium truncate ${nameCls}">${p.named ? "" : "? "}${escapeHtml(p.name)}</div>
+              <div class="text-[10px] text-neutral-400 shrink-0">${p.count} msg${p.count === 1 ? "" : "s"} ›</div>
+            </div>
+            <div class="text-xs text-neutral-500 truncate italic mt-0.5">${escapeHtml(preview)}</div>
+          </div>`;
+      }).join("") || `<div class="p-6 text-center text-neutral-400 text-sm">No real-person messages on this day.</div>`;
+
+      $("day-view").querySelectorAll("[data-key]").forEach(el => {
+        el.addEventListener("click", () => openThread(el.dataset.key, el.dataset.name, 30));
+      });
+    }
+
+    async function openThread(key, name, count) {
+      currentThread = { key, name, count };
+      $("day-modal-title").textContent = name;
+      $("day-modal-sub").textContent = `Messages around ${new Date(currentDate + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`;
+      $("thread-window").textContent = `±${count} msgs`;
+      $("thread-messages").innerHTML = `<div class="text-center text-neutral-400 text-sm py-6">Loading…</div>`;
+      showThreadView();
+      const data = await fetch(`/api/thread/${encodeURIComponent(key)}?around=${currentDate}&before=${count}&after=${count}`).then(r => r.json());
+      $("thread-window").textContent = `${data.messages.length} of ${data.total} msgs · ±${count}`;
+      renderThread(data.messages);
+    }
+
+    function formatSeparator(dt) {
+      const now = new Date();
+      const today = now.toDateString();
+      const yesterday = new Date(now.getTime() - 86400000).toDateString();
+      const day = dt.toDateString();
+      const time = dt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+      if (day === today) return `Today ${time}`;
+      if (day === yesterday) return `Yesterday ${time}`;
+      const sameYear = dt.getFullYear() === now.getFullYear();
+      const dateFmt = sameYear
+        ? dt.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })
+        : dt.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+      return `${dateFmt} at ${time}`;
+    }
+
+    function renderThread(messages) {
+      if (!messages.length) {
+        $("thread-messages").innerHTML = `<div class="text-center text-neutral-400 text-sm py-6">No text messages in this window. (Some may be reactions, attachments, or have no extractable text.)</div>`;
+        return;
+      }
+
+      // Preprocess: figure out separator placement and cluster membership for each msg.
+      const SEP_GAP_MIN = 30;     // show date/time separator when gap > 30 min or new day
+      const CLUSTER_GAP_MIN = 3;  // break cluster if gap > 3 min (still same sender)
+      const processed = messages.map((m, i) => {
+        const dt = new Date(m.date);
+        const prev = i > 0 ? messages[i - 1] : null;
+        const next = i < messages.length - 1 ? messages[i + 1] : null;
+        const prevDt = prev ? new Date(prev.date) : null;
+        const nextDt = next ? new Date(next.date) : null;
+        const gapBefore = prev ? (dt - prevDt) / 60000 : Infinity;
+        const gapAfter = next ? (nextDt - dt) / 60000 : Infinity;
+        const sameDayPrev = prev && dt.toDateString() === prevDt.toDateString();
+        const sameDayNext = next && dt.toDateString() === nextDt.toDateString();
+
+        const showSeparator = !prev || gapBefore > SEP_GAP_MIN || !sameDayPrev;
+        const isFirstInCluster = showSeparator || prev.from_me !== m.from_me || gapBefore > CLUSTER_GAP_MIN;
+        const isLastInCluster = !next || gapAfter > CLUSTER_GAP_MIN || !sameDayNext || next.from_me !== m.from_me;
+
+        return { ...m, dt, showSeparator, isFirstInCluster, isLastInCluster };
+      });
+
+      const focalDateStr = new Date(currentDate + "T00:00:00").toDateString();
+      let focalAnchorId = null;
+
+      const html = processed.map((m, i) => {
+        let out = "";
+        if (m.showSeparator) {
+          const isFocalDay = m.dt.toDateString() === focalDateStr;
+          const anchor = isFocalDay && !focalAnchorId ? (focalAnchorId = `focal-${i}`) : null;
+          out += `<div ${anchor ? `id="${anchor}"` : ""} class="text-center text-[11px] text-neutral-400 mt-4 mb-1.5">${formatSeparator(m.dt)}</div>`;
+        }
+        const sent = m.from_me;
+        const wrapAlign = sent ? "justify-end" : "justify-start";
+        const bubbleCls = sent
+          ? "bg-[#007AFF] text-white"
+          : "bg-[#E5E5EA] text-neutral-900";
+        // Bubble corner radii: full rounded with a slight tail on the last bubble of a cluster
+        let radius = "rounded-[18px]";
+        if (m.isLastInCluster) radius += sent ? " rounded-br-md" : " rounded-bl-md";
+        const margin = m.isLastInCluster ? "mb-1.5" : "mb-0.5";
+        out += `
+          <div class="flex ${wrapAlign} ${margin}">
+            <div class="${bubbleCls} ${radius} px-3 py-1.5 max-w-[72%] text-[15px] leading-snug whitespace-pre-wrap break-words">${escapeHtml(m.text)}</div>
+          </div>`;
+        return out;
+      }).join("");
+
+      $("thread-messages").innerHTML = html;
+      // Scroll to the focal day's first separator (instead of top, which is N days earlier)
+      if (focalAnchorId) {
+        const target = document.getElementById(focalAnchorId);
+        if (target) target.scrollIntoView({ block: "start" });
+      } else {
+        $("thread-messages").scrollTop = $("thread-messages").scrollHeight;
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+    }
+
+    $("thread-back").addEventListener("click", () => {
+      $("day-modal-title").textContent = new Date(currentDate + "T00:00:00").toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+      openDayModal(currentDate);
+    });
+    $("thread-expand").addEventListener("click", () => {
+      if (!currentThread) return;
+      openThread(currentThread.key, currentThread.name, Math.min(250, currentThread.count * 2));
+    });
+    $("day-close").addEventListener("click", () => $("day-modal").classList.add("hidden"));
+    $("day-modal").addEventListener("click", (e) => { if (e.target.id === "day-modal") $("day-modal").classList.add("hidden"); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("day-modal").classList.add("hidden"); });
+
+    async function loadAiInsights(fresh) {
+      const panel = $("ai-insights");
+      panel.classList.remove("hidden");
+      const listEl = $("ai-insights-list");
+      $("ai-age").textContent = "";
+      listEl.innerHTML = `<li class="text-violet-500 text-xs">Generating activity insights with Claude…</li>`;
+      try {
+        const days = parseInt($("range").value, 10);
+        const r = await fetch(`/api/ai-insights/calendar?days=${days}${fresh ? "&fresh=1" : ""}`).then(r => r.json());
+        if (r.error) { listEl.innerHTML = `<li class="text-rose-700 text-xs">${r.error}</li>`; return; }
+        if (!r.insights?.length) { listEl.innerHTML = `<li class="text-violet-500 text-xs">No insights returned.</li>`; return; }
+        $("ai-age").textContent = r.cached ? `cached · ${Math.round((r.age_seconds || 0) / 3600)}h ago` : "fresh";
+        listEl.innerHTML = r.insights.map(i => `<li class="flex gap-2"><span class="text-violet-400 select-none">•</span><span>${escapeHtml(i)}</span></li>`).join("");
+      } catch (e) {
+        listEl.innerHTML = `<li class="text-rose-700 text-xs">Failed: ${e.message}</li>`;
+      }
+    }
+
+    function bindCollapse(toggleId, bodyId, chevronId, storageKey, ignoreId) {
+      const collapsed = localStorage.getItem(storageKey) === "1";
+      const body = $(bodyId), chev = $(chevronId);
+      const apply = (c) => {
+        body.classList.toggle("hidden", c);
+        chev.style.transform = c ? "rotate(-90deg)" : "rotate(0deg)";
+      };
+      apply(collapsed);
+      $(toggleId).addEventListener("click", (e) => {
+        if (ignoreId && e.target.id === ignoreId) return;
+        const next = !body.classList.contains("hidden");
+        apply(next);
+        localStorage.setItem(storageKey, next ? "1" : "0");
+      });
+    }
+    bindCollapse("ai-toggle", "ai-body", "ai-chevron", "cal.ai-collapsed", "ai-refresh");
+    $("ai-refresh").addEventListener("click", (e) => { e.stopPropagation(); loadAiInsights(true); });
+
+    $("range").addEventListener("change", () => { load(); loadAiInsights(); });
+    load();
+    loadAiInsights();
+  </script>
+</body>
+</html>

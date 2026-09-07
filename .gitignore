@@ -1,0 +1,18 @@
+# Secrets
+.env
+
+# Personal data - 448 real contacts with phone numbers and emails.
+# Deliberately untracked: keep PII out of git history.
+crm.db
+crm.db-wal
+crm.db-shm
+
+# Virtualenv
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# macOS
+.DS_Store
