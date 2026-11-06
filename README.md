@@ -18,11 +18,20 @@ too; it is now a separate app.
 
 All taken from the fake demo dataset (see [Demo with fake data](#demo-with-fake-data)).
 
-Contacts, sorted by last contact, with tier, chemistry and cadence badges:
-![Contacts list](docs/screenshots/contacts.png)
+Contacts, sorted by last contact, with the latest message pulled from Messages:
+![Contacts list](docs/screenshots/contacts.jpg)
+
+Filtered to one city (who can I see while I'm in NYC?), sorted by time spent talking:
+![Location filter](docs/screenshots/location-nyc.jpg)
+
+Service providers (realtor, movers, cleaner, etc.) kept separate from people:
+![Services](docs/screenshots/services.jpg)
 
 A contact, with recent messages pulled from Messages:
-![Contact detail](docs/screenshots/contact-detail.png)
+![Contact detail](docs/screenshots/contact-detail.jpg)
+
+Investors, filterable by type, stage, sector and check size, for routing deals and intros:
+![Investors](docs/screenshots/investors.jpg)
 
 Deals you're advising, watching, evaluating or committed to:
 ![Deals](docs/screenshots/deals.png)

@@ -218,6 +218,22 @@ def seed_apple_dbs() -> None:
                 k.execute("INSERT INTO ZCALLRECORD (ZADDRESS, ZDATE, ZDURATION) VALUES (?,?,?)",
                           (phone_for(i), (t - APPLE_EPOCH).total_seconds(), rng.randint(60, 3600)))
             t -= timedelta(days=rng.expovariate(1 / gap))
+    # Service providers: a short scripted thread each (days ago, from_me, text).
+    service_threads = [
+        [(40, 1, "Hi Bianca, any 1BRs in Hayes Valley under 4k?"), (39, 0, "Two! Can do showings Saturday 11am"), (12, 0, "New listing just hit, sending now")],
+        [(30, 1, "Can you do a 1BR move on the 14th?"), (29, 0, "Yes, crew of 2, 8am. $640 flat"), (3, 0, "Confirmed for Saturday 8am")],
+        [(21, 0, "Can we switch to every other Thursday?"), (20, 1, "Works for me"), (6, 0, "All done today, left the key in the lockbox")],
+        [(90, 0, "Reminder: cleaning appt Tue 3pm"), (60, 1, "Need to reschedule, anything next week?"), (18, 0, "Time for your 6-month cleaning! Reply Y to book")],
+        [(14, 1, "Same time Monday?"), (14, 0, "7am, see you there"), (2, 0, "Great session today. Rest your shoulder")],
+        [(70, 0, "Need your 1099s by March 15"), (45, 1, "Uploaded everything to the portal"), (9, 0, "Return filed. Refund in ~3 weeks")],
+    ]
+    for j, thread in enumerate(service_threads):
+        hid = m.execute("INSERT INTO handle (id) VALUES (?)", (phone_for(60 + j),)).lastrowid
+        chat = m.execute("INSERT INTO chat (style) VALUES (45)").lastrowid
+        for days, from_me, text in thread:
+            mid = m.execute("INSERT INTO message (date, text, is_from_me, handle_id) VALUES (?,?,?,?)",
+                            (apple_ns(NOW - timedelta(days=days, hours=j)), text, from_me, hid)).lastrowid
+            m.execute("INSERT INTO chat_message_join VALUES (?,?)", (chat, mid))
     # Automated sender (shortcode) and the unnamed handles, so cleanup has something to do.
     for h, from_me in (("72975", False), (UNNAMED[0], True), (UNNAMED[1], False)):
         hid = m.execute("INSERT INTO handle (id) VALUES (?)", (h,)).lastrowid
