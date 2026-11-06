@@ -1,0 +1,955 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Private investments</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html { font-size: 17px; }
+    body { font-family: "Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif; font-feature-settings: "tnum", "cv11"; background: #f7f7f5; -webkit-font-smoothing: antialiased; }
+    .fld { width: 100%; padding: 0.375rem 0.625rem; border-radius: 0.5rem; border: 1px solid #e5e5e5; background: white; font-size: 0.875rem; }
+    .fld:focus { outline: none; border-color: #a3a3a3; box-shadow: 0 0 0 2px #e5e5e5; }
+    textarea.fld { resize: vertical; }
+    .card { background: white; border: 1px solid #ebebea; border-radius: 1rem; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
+    /* Set-aside money: committed but not wired. Striped so it reads differently from invested. */
+    .stripe { background: repeating-linear-gradient(135deg, #a3a3a3 0 3px, #e5e5e5 3px 6px); }
+    /* Always-editable table cell: reads as plain text until hovered or focused. */
+    .cell { width: 100%; padding: 0.25rem 0.375rem; border-radius: 0.375rem; border: 1px solid transparent; background: transparent; font: inherit; }
+    .cell:hover { background: #f5f5f4; }
+    .cell:focus { outline: none; background: white; border-color: #a3a3a3; box-shadow: 0 0 0 2px #e5e5e5; }
+    input[type=date].cell:invalid, input[type=date].cell[value=""] { color: #a3a3a3; }
+    .h { font-size: 1rem; font-weight: 600; color: #171717; letter-spacing: -0.01em; }
+  </style>
+</head>
+<body class="text-neutral-900 min-h-screen">
+  <div class="max-w-7xl mx-auto px-4 sm:px-8 py-8 sm:py-12 space-y-8">
+    <header>
+      <div class="flex items-center justify-between text-sm">
+        <a href="/" class="text-teal-700 hover:underline">← Contacts</a>
+        <a id="demo-link" class="text-neutral-400 hover:text-neutral-700"></a>
+      </div>
+      <h1 class="text-4xl font-semibold tracking-tight mt-2">Private investments</h1>
+    </header>
+
+    <section id="totals" class="grid grid-cols-2 sm:grid-cols-5 gap-3"></section>
+
+    <section class="card p-4 sm:p-5">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="h">Pacing <span id="pace-year" class="normal-case font-normal"></span></h2>
+      </div>
+      <div id="pacing" class="overflow-x-auto"></div>
+    </section>
+
+    <section class="card p-4 sm:p-5">
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+        <h2 class="h">vs. public markets</h2>
+        <div id="bench-pills" class="flex flex-wrap gap-1 text-xs"></div>
+      </div>
+      <div id="bench"></div>
+    </section>
+
+    <section class="card overflow-hidden">
+      <div class="p-4 sm:p-5 pb-3 flex items-center justify-between">
+        <h2 class="h">Investments</h2>
+        <div class="flex gap-2">
+          <a id="csv-btn" href="/api/portfolio/investments.csv" class="px-3 py-1.5 text-sm rounded-lg border border-neutral-300 bg-white hover:bg-neutral-100" title="Download every investment as a spreadsheet">Download CSV</a>
+          <button id="add-inv-btn" class="px-3 py-1.5 text-sm rounded-lg bg-neutral-900 text-white hover:bg-neutral-800">+ Add</button>
+        </div>
+      </div>
+      <div id="review" class="hidden fixed bottom-4 right-4 z-40 w-[min(32rem,calc(100vw-2rem))] rounded-xl border border-violet-200 bg-white shadow-2xl overflow-hidden"></div>
+      <div id="investments"></div>
+    </section>
+
+    <section class="card p-4 sm:p-5">
+      <h2 class="h mb-2">Evaluating</h2>
+      <div id="evaluating" class="overflow-x-auto"></div>
+    </section>
+
+    <section class="card p-4 sm:p-5">
+      <h2 class="h mb-3">Pipeline</h2>
+      <div id="pipeline" class="grid grid-cols-2 lg:grid-cols-4 gap-4"></div>
+    </section>
+
+    <section class="card p-4 sm:p-5">
+      <h2 class="h mb-3">Forward deals to</h2>
+      <div id="forward" class="grid grid-cols-2 gap-4"></div>
+    </section>
+  </div>
+
+  <div id="toast" class="hidden fixed bottom-5 left-1/2 -translate-x-1/2 z-50 bg-neutral-900 text-white text-sm px-4 py-2 rounded-lg shadow-xl"></div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    // ---------- demo mode (/portfolio?demo=1) ----------
+    // For public screenshots. Everything comes from the made-up data below and the server is
+    // never called, so none of the real portfolio can show up. Edits live only in this tab.
+    const DEMO = new URLSearchParams(location.search).has("demo");
+    const DEMO_TAGS = ["Direct", "Event", "Warm intro", "VC co-invest", "Syndicate / SPV", "Secondary platform", "Inbound"];
+    const DEMO_DB = {
+      nextId: 100,
+      rules: { annual_budget: 100000 },
+      // Made-up companies, funds and people. Worth assumes ~20-35% dilution since entry.
+      investments: [
+        { id: 1, company: "Lumen Robotics", source: "Syndicate / SPV", invested_on: "2024-03-18", amount: 5000, vehicle: "AngelList", entry_stage: "Seed", entry_valuation: "$40M", current_stage: "Series B", current_valuation: "$600M", current_value: 52000, valuation_as_of: "2026-05", valuation_source: "https://example.com/lumen-series-b", kind: "direct", status: "active", why: "Strong robotics research team; general-purpose manipulation models." },
+        { id: 2, company: "Quillstack", source: "Warm intro", invested_on: "2024-04-23", amount: 5000, vehicle: "AngelList", entry_stage: "Series A", entry_valuation: "$90M", current_stage: "Series C", current_valuation: "$1.2B", current_value: 46000, valuation_as_of: "2025-09", valuation_source: "https://example.com/quillstack-series-c", kind: "direct", status: "active", why: "Fastest-shipping team in its category; usage growing weekly." },
+        { id: 3, company: "Briefcase AI", source: "VC co-invest", invested_on: "2024-07-23", amount: 10000, vehicle: "Sydecar", entry_stage: "Series A", entry_valuation: "$150M", current_stage: "Series C", current_valuation: "$900M", current_value: 44000, valuation_as_of: "2026-09", valuation_source: "https://example.com/briefcase-series-c", kind: "direct", status: "active", why: "Clear wedge into law firms; every partner I asked was piloting it." },
+        { id: 4, company: "Halo Wearables", source: "Event", invested_on: "2023-03-08", amount: 10000, vehicle: "Carta", entry_stage: "Series A", entry_valuation: "$85M", current_stage: "Acquired", current_valuation: "$12M", kind: "direct", status: "exited", returned: 1400, why: "Bet on a new device category. Lesson: hardware + no distribution." },
+        { id: 5, company: "Forgepoint", source: "Secondary platform", invested_on: "2026-02-10", amount: 15000, vehicle: "Secondary", entry_stage: "Secondary", entry_valuation: "$2.9B", current_stage: "Series D", current_valuation: "$5B", current_value: 25600, valuation_as_of: "2026-07", valuation_source: "https://example.com/forgepoint-series-d", kind: "direct", status: "active", why: "Default dev tool for every engineer I know." },
+        { id: 6, company: "Tidewater Labs", source: "Warm intro", amount: 25000, entry_stage: "Seed", entry_valuation: "$60M", kind: "direct", status: "pending", why: "Small allocation via an existing investor; wiring this month." },
+        { id: 7, company: "Kestrel Fund II", source: "Direct", invested_on: "2020-11-03", amount: 25000, vehicle: "LP", vintage: "2020", fund_size: "$35M", called: 25000, current_value: 44000, returned: 8000, kind: "fund", status: "active", why: "High-volume pre-seed access; great at founder support." },
+        { id: 8, company: "Saltmarsh Ventures III", source: "Inbound", invested_on: "2025-04-15", amount: 25000, vehicle: "LP", vintage: "2025", fund_size: "$60M", called: 10000, current_value: 11500, kind: "fund", status: "active", why: "First-check specialist with a long track record." },
+      ],
+      pipeline: [
+        { id: 1, name: "Ada R.", list: "tracking", note: "Ex-research lab, exploring agents", timing: "6 mo+", potential: "High" },
+        { id: 2, name: "Sam K.", list: "tracking", note: "Climate x AI", timing: "Now", potential: "Medium" },
+        { id: 3, name: "Glacier Compute", list: "missed", note: "Couldn't get allocation in the Series A" },
+        { id: 4, name: "Pocketbot", list: "passed", note: "Hardware risk, unclear retention" },
+      ],
+      evaluating: [
+        { id: 1, company: "Northwind Robotics", round: "Seed", valuation: "$40M", check_size: 10000, deadline: "2026-11-07", source: "Warm intro", next_step: "Reference call with ex-manager", note: "Strong team; unclear go-to-market." },
+      ],
+      forward_to: [
+        { id: 1, name: "Bluebird Capital", kind: "vc" }, { id: 2, name: "Ironwood Partners", kind: "vc" },
+        { id: 3, name: "Priya R.", kind: "angel", note: "AI infra" }, { id: 4, name: "Marco L.", kind: "angel" },
+      ],
+    };
+    const DEMO_NUM = new Set(["amount", "current_value", "returned", "called", "check_size"]);
+    async function demoApi(url, method, body) {
+      const [, table, id, lookup] = url.match(/^\/api\/portfolio\/(\w+)(?:\/(\d+))?(\/lookup)?/) || [];
+      const copy = x => JSON.parse(JSON.stringify(x));
+      if (table === "settings") { if (method === "PUT") DEMO_DB.rules = body.rules; return copy({ rules: DEMO_DB.rules }); }
+      if (lookup) {
+        await new Promise(r => setTimeout(r, 1800));
+        const row = DEMO_DB.investments.find(r => r.id === +id);
+        return row?.current_valuation
+          ? { found: true, valuation: row.current_valuation, stage: row.current_stage, as_of: row.valuation_as_of || "2026-10", source_url: row.valuation_source || null, note: null }
+          : { found: true, valuation: "$60M", stage: "Seed", as_of: "2026-09", source_url: "https://example.com/tidewater-seed", note: "talks at $150M" };
+      }
+      const clean = b => Object.fromEntries(Object.entries(b || {}).map(([k, v]) => {
+        v = typeof v === "string" ? v.trim() : v;
+        if (v === "" || v === undefined) return [k, null];
+        return [k, DEMO_NUM.has(k) ? parseInt(String(v).replace(/[^\d-]/g, ""), 10) || 0 : v];
+      }));
+      if (method === "GET") return copy(DEMO_DB[table]);
+      if (method === "POST") { const row = { id: ++DEMO_DB.nextId, ...clean(body) }; DEMO_DB[table].push(row); return copy(row); }
+      if (method === "DELETE") { DEMO_DB[table] = DEMO_DB[table].filter(r => r.id !== +id); return { ok: true }; }
+      const row = DEMO_DB[table].find(r => r.id === +id);
+      Object.assign(row, clean(body));
+      return copy(row);
+    }
+    const BUCKETS = ["early", "mid", "late"];
+    const BUCKET_LABEL = { early: "Early", mid: "Mid", late: "Late", fund: "Fund", none: "Unsorted" };
+    const PIPELINE_LISTS = [["investing", "Investing"], ["tracking", "Tracking"], ["missed", "Missed"], ["passed", "Passed"]];
+    const FORWARD_KINDS = [["vc", "VCs"], ["angel", "Angels"]];
+
+    let investments = [], pipeline = [], forward = [], evaluating = [], rules = null;
+    let openId = null;
+
+    const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    // Always the full amount with commas: $10,000, $525,000.
+    function money(n) {
+      if (n == null) return "—";
+      return (n < 0 ? "−$" : "$") + Math.abs(Math.round(n)).toLocaleString("en-US");
+    }
+    // "$500,000,000,000" -> "$500B"; anything that isn't a plain number ("MFN", "~1T") shows as typed.
+    function shortVal(v) {
+      if (!v) return "";
+      // "$965B post-money", "$20,000,000" -> "$965B", "$20M". Keeps "~1T", "MFN" as typed.
+      const n = /^\s*\$?\s*[\d.,]+\s*[kmbt]?\b/i.test(v) ? parseUsd(v) : null;
+      if (!n) return v;
+      for (const [d, u] of [[1e12, "T"], [1e9, "B"], [1e6, "M"], [1e3, "k"]]) if (n >= d) return "$" + +(n / d).toFixed(2) + u;
+      return "$" + n;
+    }
+    let toastTimer;
+    function toast(msg) {
+      $("toast").textContent = msg; $("toast").classList.remove("hidden");
+      clearTimeout(toastTimer); toastTimer = setTimeout(() => $("toast").classList.add("hidden"), 1500);
+    }
+    async function api(url, method = "GET", body) {
+      if (DEMO) return demoApi(url, method, body);
+      const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { toast(data.error || "Error"); throw new Error(data.error); }
+      return data;
+    }
+
+    // Bucket: explicit override, else guessed from entry stage. Funds sit outside the check rules.
+    function bucketOf(i) {
+      if (i.kind === "fund") return "fund";
+      if (i.bucket) return i.bucket;
+      const s = (i.entry_stage || "").toLowerCase();
+      if (/pre-?seed|seed/.test(s)) return "early";
+      if (/series [ab]\b/.test(s)) return "mid";
+      if (/series [c-z]|secondary|primary|growth|late/.test(s)) return "late";
+      return "none";
+    }
+    const valueOf = i => i.current_value ?? (i.status === "written_off" ? 0 : i.amount ?? 0);
+
+    // ---------- totals ----------
+    // Pending = committed but not wired yet. It counts against this year's budget,
+    // but not toward invested / worth until its status changes to Active.
+    const isPending = i => i.status === "pending";
+    const pendingRows = () => investments.filter(isPending);
+
+    function drawTotals() {
+      const live = investments.filter(i => !isPending(i));
+      const invested = live.reduce((a, i) => a + paidIn(i), 0);
+      const worth = live.filter(i => i.status !== "exited").reduce((a, i) => a + valueOf(i), 0);
+      const returned = live.reduce((a, i) => a + (i.returned || 0), 0);
+      const multiple = invested ? (worth + returned) / invested : 0;
+      const tile = (label, value, sub = "") => `
+        <div class="card p-5"><div class="text-sm text-neutral-500">${label}</div>
+        <div class="text-[1.7rem] leading-tight font-semibold tracking-tight tabular-nums mt-1">${value}</div>
+        <div class="text-xs text-neutral-500 mt-0.5 truncate">${sub}</div></div>`;
+      const companies = new Set(live.map(i => (i.company || "").toLowerCase())).size;
+      const pend = pendingRows();
+      $("totals").innerHTML =
+        tile("Total invested", money(invested), `${companies} companies`) +
+        tile("Value now", money(worth), "latest marks") +
+        tile("Returned (liquid)", money(returned), `DPI ${invested ? (returned / invested).toFixed(2) : "0.00"}× · cash back ÷ invested`) +
+        tile("Multiple (TVPI)", multiple.toFixed(2) + "×", "(worth + returned) / invested") +
+        `<div class="col-span-2 sm:col-span-1 rounded-2xl border border-dashed border-neutral-400 bg-neutral-50 p-5">
+          <div class="text-sm text-neutral-500 flex items-center gap-1.5"><span class="stripe inline-block w-2.5 h-2.5 rounded-sm"></span>Pending</div>
+          <div class="text-[1.7rem] leading-tight font-semibold tracking-tight tabular-nums mt-1 text-neutral-600">${money(pend.reduce((a, i) => a + (i.amount || 0), 0))}</div>
+          <div class="text-xs text-neutral-500 mt-0.5 truncate">${pend.length ? esc(pend.map(i => i.company).join(", ")) : "nothing committed, unwired"}</div>
+        </div>`;
+    }
+
+    // ---------- pacing ----------
+    // One yearly budget. Invested this year + pending (committed, not wired) = allocated;
+    // the rest is what's left. Unused room carries forward within the year, resets each January.
+    const budgetOf = () => rules.annual_budget ?? 100000;
+
+    function drawPacing() {
+      const now = new Date(), year = now.getFullYear();
+      const start = new Date(year, 0, 1), end = new Date(year + 1, 0, 1);
+      const elapsed = (now - start) / (end - start);
+      const budget = budgetOf();
+      const thisYear = investments.filter(i => !isPending(i) && (i.invested_on || "").startsWith(String(year)));
+      const invested = thisYear.reduce((a, i) => a + (i.amount || 0), 0);
+      const pending = pendingRows().reduce((a, i) => a + (i.amount || 0), 0);
+      const left = budget - invested - pending;
+      const evenPace = budget * elapsed;
+      const diff = invested + pending - evenPace;
+      const pct = v => budget ? Math.max(0, Math.min(100, v / budget * 100)) : 0;
+      $("pace-year").textContent = `· ${year}`;
+      const big = (label, value, cls = "", sub = "") => `
+        <div><div class="text-sm text-neutral-500">${label}</div>
+        <div class="text-2xl font-semibold tracking-tight tabular-nums ${cls}">${value}</div>
+        ${sub ? `<div class="text-xs text-neutral-500">${sub}</div>` : ""}</div>`;
+      $("pacing").innerHTML = `
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          ${big(`Invested in ${year}`, money(invested), "", `${thisYear.length} check${thisYear.length === 1 ? "" : "s"}`)}
+          ${big("Pending", money(pending), "text-neutral-600", "committed, not wired")}
+          ${big("Left", money(left), left < 0 ? "text-rose-600" : "text-emerald-700", left < 0 ? "over budget" : "after pending")}
+          ${big("Yearly budget", money(budget), "", `<button id="budget-edit" class="text-teal-700 hover:underline">edit</button>`)}
+        </div>
+        <div class="relative h-2.5 bg-neutral-100 rounded-full mt-4 overflow-hidden">
+          <div class="absolute inset-y-0 left-0 bg-neutral-800" style="width:${pct(invested)}%"></div>
+          <div class="absolute inset-y-0 stripe" style="left:${pct(invested)}%;width:${Math.min(pct(pending), 100 - pct(invested))}%"></div>
+          <div class="absolute inset-y-0 w-0.5 bg-amber-500" style="left:${elapsed * 100}%" title="Even pace for today"></div>
+        </div>
+        <div class="flex flex-wrap justify-between gap-2 mt-2 text-xs text-neutral-500">
+          <span><span class="inline-block w-2.5 h-2.5 rounded-sm bg-neutral-800 align-middle"></span> invested
+            <span class="stripe inline-block w-2.5 h-2.5 rounded-sm align-middle ml-2"></span> pending
+            <span class="inline-block w-0.5 h-2.5 bg-amber-500 align-middle ml-2"></span> even pace today (${money(evenPace)})</span>
+          <span class="${diff > 0 ? "text-amber-700" : "text-emerald-700"}" title="The budget is a cap: under pace means more money still free">${diff > 0 ? `${money(diff)} over an even pace` : `${money(-diff)} under an even pace`}</span>
+        </div>`;
+      $("budget-edit").onclick = async () => {
+        const v = prompt("Yearly budget ($):", budget);
+        const n = parseInt(String(v ?? "").replace(/[^\d]/g, ""), 10);
+        if (!n) return;
+        rules = (await api("/api/portfolio/settings", "PUT", { rules: { ...rules, annual_budget: n } })).rules;
+        toast("Saved"); drawPacing();
+      };
+    }
+
+    // ---------- investments ----------
+    const STATUS_OPTS = [["active", "Active"], ["pending", "Pending"], ["exited", "Exited"], ["written_off", "Written off"]];
+    const STATUS_LABEL = Object.fromEntries(STATUS_OPTS);
+    const BUCKET_OPTS = [["", "Auto (from stage)"], ["early", "Early"], ["mid", "Mid"], ["late", "Late"]];
+
+    // "2025-07-31" -> "Jul 2025"
+    const monthYr = d => d ? new Date(d + "T12:00:00").toLocaleDateString(undefined, { month: "short", year: "numeric" }) : "";
+    // Fund-sheet metrics: MOIC = (worth now + returned) / invested; gain = that minus invested;
+    // weight = share of the portfolio's current worth.
+    // What's actually gone out: for a fund, the capital called so far (if known), else the commitment.
+    const paidIn = i => i.kind === "fund" && i.called != null ? i.called : (i.amount || 0);
+    // Pending rows (committed, not wired) have no worth or return yet.
+    const worthOf = i => i.status === "exited" || i.status === "pending" ? 0 : valueOf(i);
+    const moic = i => paidIn(i) && i.status !== "pending" ? (worthOf(i) + (i.returned || 0)) / paidIn(i) : null;
+    const gain = i => i.status === "pending" ? null : worthOf(i) + (i.returned || 0) - paidIn(i);
+    const totalWorth = () => investments.reduce((a, i) => a + worthOf(i), 0);
+    const weight = i => { const t = totalWorth(); return t ? worthOf(i) / t : null; };
+
+    // "How I got it": who or what brought me the deal at the time I invested.
+    const DEFAULT_TAGS = DEMO_TAGS; // plus every source already used in your data
+    const TAG_COLORS = [
+      "bg-sky-50 text-sky-800 ring-sky-200", "bg-emerald-50 text-emerald-800 ring-emerald-200",
+      "bg-amber-50 text-amber-800 ring-amber-200", "bg-violet-50 text-violet-800 ring-violet-200",
+      "bg-rose-50 text-rose-800 ring-rose-200", "bg-teal-50 text-teal-800 ring-teal-200",
+      "bg-indigo-50 text-indigo-800 ring-indigo-200", "bg-orange-50 text-orange-800 ring-orange-200",
+    ];
+    const NEUTRAL_PILL = "bg-neutral-100 text-neutral-700 ring-neutral-200";
+    const tagColor = t => TAG_COLORS[[...t].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7) % TAG_COLORS.length];
+    const pill = (t, cls) => t ? `<span class="inline-block px-2 py-0.5 rounded-full text-xs ring-1 ring-inset whitespace-nowrap ${cls}">${esc(t)}</span>` : "";
+    const tagPill = t => pill(t, t ? tagColor(t) : "");
+    const STAGE_LIST = ["Pre-seed", "Seed", "Series A", "Series B", "Series C", "Series D", "Series E", "Series F", "Series G", "Series H", "Secondary", "Primary", "Public", "Acquired"];
+    const used = f => investments.map(i => i[f]).filter(Boolean);
+    const uniq = a => [...new Set(a)];
+
+    // Popup choices per field. Everything opens on the first click and looks the same.
+    const MENUS = {
+      tags:   () => ({ options: uniq([...DEFAULT_TAGS, ...used("source")]).map(t => [t, t]), pill: tagPill, allowNew: true }),
+      stage:  () => ({ options: uniq([...STAGE_LIST, ...used("entry_stage"), ...used("current_stage")]).map(t => [t, t]), pill: t => pill(t, NEUTRAL_PILL), allowNew: true }),
+      via:    () => ({ options: uniq(used("vehicle")).sort().map(t => [t, t]), pill: t => pill(t, NEUTRAL_PILL), allowNew: true }),
+      kind:   () => ({ options: [["direct", "Direct"], ["fund", "Fund (LP)"]], pill: t => pill(t === "fund" ? "Fund (LP)" : "Direct", NEUTRAL_PILL), allowNew: false, noClear: true }),
+      status: () => ({ options: STATUS_OPTS, pill: t => pill(STATUS_LABEL[t] || t, NEUTRAL_PILL), allowNew: false, noClear: true }),
+    };
+
+    // Column spec. `extra` columns sit at the end, collapsed behind the "+ more" toggle.
+    const COLUMNS = [
+      { key: "company", label: "Company", edit: "text", sort: i => (i.company || "").toLowerCase() },
+      { key: "source", label: "How I got it", edit: "menu:tags", sort: i => (i.source || "~").toLowerCase(), show: i => tagPill(i.source) },
+      { key: "invested_on", label: "Date", edit: "date", sort: i => i.status === "pending" ? "9999" : i.invested_on || "",
+        show: i => i.status === "pending" ? `<span class="text-neutral-400 italic">${i.invested_on ? monthYr(i.invested_on) + " " : ""}future</span>` : monthYr(i.invested_on), cls: "text-neutral-600" },
+      { key: "amount", label: "Amount", edit: "num", sort: i => i.amount || 0, show: i => money(i.amount), right: 1 },
+      { key: "entry_valuation", label: "Entry val.", edit: "text", sort: i => parseUsd(i.entry_valuation) || 0, show: i => esc(shortVal(i.entry_valuation)), cls: "text-neutral-600" },
+      { key: "current_valuation", label: "Val. now", edit: "text", sort: i => parseUsd(i.current_valuation || i.entry_valuation) || 0,
+        show: i => !i.current_valuation ? (i.entry_valuation ? `<span class="text-neutral-400" title="Same as entry until there's a newer valuation">${esc(shortVal(i.entry_valuation))}</span>` : "") : esc(shortVal(i.current_valuation)) + (i.valuation_source ? ` <a href="${esc(i.valuation_source)}" target="_blank" rel="noopener" title="Source${i.valuation_as_of ? ", as of " + esc(i.valuation_as_of) : ""}" class="text-neutral-400 hover:text-teal-700">↗</a>` : "") },
+      { key: "current_value", label: "Value", edit: "num", sort: worthOf, show: i => i.status === "exited" || i.status === "pending" ? "" : money(worthOf(i)), right: 1 },
+      { key: "moic", label: "MOIC", title: "(worth + returned) / invested", sort: i => moic(i) ?? -1, show: i => moic(i) != null ? moic(i).toFixed(2) + "×" : "", right: 1, tone: 1 },
+      { key: "why", label: "Why I invested", edit: "long", sort: i => (i.why || "~").toLowerCase(), // Fixed two-line box in every row (even empty ones), so rows never change height.
+        show: i => `<span class="block w-56 h-8 -my-1 text-xs leading-4 whitespace-normal line-clamp-2 overflow-hidden ${i.why ? "text-neutral-600" : "text-neutral-300"}" title="${esc(i.why || "")}">${i.why ? esc(i.why) : "—"}</span>` },
+      { key: "vintage", label: "Vintage", edit: "text", fundOnly: 1, sort: i => i.vintage || "" },
+      { key: "fund_size", label: "Fund size", edit: "text", fundOnly: 1, sort: i => parseUsd(i.fund_size) || 0, show: i => esc(shortVal(i.fund_size)), cls: "text-neutral-600" },
+      { key: "called", label: "Called", edit: "num", fundOnly: 1, title: "Capital the fund has drawn from your commitment so far", right: 1, sort: i => i.called || 0,
+        show: i => i.called != null ? money(i.called) + (i.amount ? ` <span class="text-xs text-neutral-400">${Math.round(i.called / i.amount * 100)}%</span>` : "") : "" },
+      { key: "vehicle", label: "Via", edit: "menu:via", extra: 1, sort: i => (i.vehicle || "~").toLowerCase(), cls: "text-neutral-600" },
+      { key: "entry_stage", label: "Entry stage", edit: "menu:stage", extra: 1, sort: i => (i.entry_stage || "~").toLowerCase(), cls: "text-neutral-600" },
+      { key: "current_stage", label: "Stage now", edit: "menu:stage", extra: 1, sort: i => (i.current_stage || "~").toLowerCase() },
+      { key: "weight", label: "Weight", extra: 1, title: "Share of the portfolio's total worth now", sort: i => weight(i) ?? 0, show: i => weight(i) != null ? (weight(i) * 100).toFixed(1) + "%" : "", right: 1, cls: "text-neutral-600" },
+      { key: "gain", label: "Gain", extra: 1, title: "worth + returned − invested", sort: i => gain(i) ?? -Infinity, show: i => i.amount && gain(i) != null ? money(gain(i)) : "", right: 1, tone: 1 },
+      { key: "kind", label: "Type", edit: "menu:kind", extra: 1, title: "Direct investment or fund (LP)", sort: i => i.kind || "direct", show: i => i.kind === "fund" ? "Fund (LP)" : "Direct", cls: "text-neutral-600" },
+      { key: "status", label: "Status", edit: "menu:status", extra: 1, sort: i => i.status || "", show: i => esc(STATUS_LABEL[i.status] || ""), cls: "text-neutral-600" },
+      { key: "returned", label: "Returned", edit: "num", extra: 1, title: "Cash back so far", sort: i => i.returned || 0, show: i => i.returned ? money(i.returned) : "", right: 1 },
+    ];
+    const FUND_NA = new Set(["entry_valuation", "current_valuation", "entry_stage", "current_stage"]);
+    const TEXT_FIRST_ASC = new Set(["company", "source", "vehicle", "entry_stage", "current_stage", "why", "status"]);
+    const stored = (k, fallback) => { try { return JSON.parse(localStorage.getItem(k)) ?? fallback; } catch { return fallback; } };
+    const store = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+    // Filters (combine freely): year, stage, type. Later = Series A and up and secondaries.
+    const stageGroup = i => ["mid", "late"].includes(bucketOf(i)) ? "later" : "early";
+    // Pending rows without a date count as this year: that's when the money goes out.
+    const yearOf = i => i.invested_on ? i.invested_on.slice(0, 4) : i.status === "pending" ? String(new Date().getFullYear()) : "";
+    let filters = { year: "all", stage: "all", type: "all", ...stored("portfolio.filters", {}) };
+    let sort = stored("portfolio.sort2", { key: "invested_on", dir: -1 });
+    let showExtra = stored("portfolio.showExtra", false);
+    const matches = i =>
+      (filters.year === "all" || yearOf(i) === filters.year) &&
+      (filters.stage === "all" || (i.kind !== "fund" && stageGroup(i) === filters.stage)) &&
+      (filters.type === "all" || (filters.type === "fund") === (i.kind === "fund"));
+
+    function drawInvestments() {
+      // Valuation and stage columns don't apply to funds, so showing only funds leaves them out.
+      const fundsOnly = filters.type === "fund";
+      const VIS = COLUMNS.filter(c => (!c.extra || showExtra) && (!c.fundOnly || fundsOnly) && !(fundsOnly && FUND_NA.has(c.key)));
+      // Fund vocabulary when only funds are shown.
+      const FUND_LABELS = { amount: "Committed", current_value: "NAV", moic: "TVPI", returned: "Distributed" };
+      const labelOf = c => fundsOnly && FUND_LABELS[c.key] || c.label;
+      const nExtra = COLUMNS.filter(c => c.extra && !c.fundOnly).length;
+      const col = COLUMNS.find(c => c.key === sort.key) || COLUMNS[2];
+      const inTab = investments.filter(matches);
+      const live = inTab.filter(i => i.status !== "pending");
+      const tInv = live.reduce((a, i) => a + paidIn(i), 0);
+      const tWorth = live.reduce((a, i) => a + worthOf(i), 0), tRet = live.reduce((a, i) => a + (i.returned || 0), 0);
+      const years = [...new Set(investments.map(yearOf).filter(Boolean))].sort().reverse();
+      const group = (key, label, opts) => `
+        <div class="flex items-center gap-1">
+          <span class="text-neutral-500 mr-1">${label}</span>
+          ${[["all", "All"], ...opts].map(([v, l]) => `<button data-filter="${key}" data-v="${v}" class="px-2.5 py-1 rounded-full border ${filters[key] === v ? "bg-neutral-900 text-white border-neutral-900" : "bg-white border-neutral-300 text-neutral-700 hover:bg-neutral-100"}">${l}</button>`).join("")}
+        </div>`;
+      const tabsHtml = `
+        <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 sm:px-5 pb-3 text-xs">
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+            ${group("year", "Year", years.map(y => [y, y]))}
+            <div class="${filters.type === "fund" ? "opacity-40" : ""}" title="${filters.type === "fund" ? "Funds don't have a stage" : ""}">${group("stage", "Stage", [["early", "Early"], ["later", "Later"]])}</div>
+            ${group("type", "Type", [["direct", "Direct"], ["fund", "Funds"]])}
+          </div>
+          <div class="text-neutral-500 tabular-nums">${inTab.length} shown · ${money(tInv)} invested · value ${money(tWorth)} · ${tInv ? ((tWorth + tRet) / tInv).toFixed(2) : "—"}×</div>
+        </div>`;
+      const rows = inTab.sort((a, b) => {
+        if (a.id === newRowId || b.id === newRowId) return a.id === newRowId ? -1 : 1;
+        const x = col.sort(a), y = col.sort(b);
+        return (x < y ? -1 : x > y ? 1 : 0) * sort.dir;
+      });
+      const toneOf = i => { const m = moic(i); return m == null || Math.abs(m - 1) < 0.005 ? "text-neutral-600" : m > 1 ? "text-emerald-600" : "text-rose-600"; };
+      const firstExtra = VIS.findIndex(c => c.extra);
+      $("investments").innerHTML = tabsHtml + (rows.length ? `
+        <div class="overflow-x-auto border-t border-neutral-100">
+          <table class="w-full text-sm whitespace-nowrap">
+            <thead>
+              <tr class="text-xs text-neutral-500">
+                ${VIS.map((c, n) => `
+                  <th class="font-normal px-3 py-2 ${n === 0 ? "sticky left-0 z-10 bg-white pl-5" : ""} ${c.right ? "text-right" : "text-left"} ${c.extra ? "bg-stone-100/70" : ""} ${n === firstExtra ? "border-l border-stone-200" : ""}">
+                    ${n === firstExtra ? `<div class="text-[11px] uppercase tracking-wide text-stone-500 -mt-1 mb-0.5">More</div>` : c.extra ? `<div class="text-[11px] -mt-1 mb-0.5">&nbsp;</div>` : ""}
+                    <button data-sort="${c.key}" title="${esc(c.title || "Sort")}" class="hover:text-neutral-900 ${sort.key === c.key ? "text-neutral-900 font-medium" : ""}">${labelOf(c)}${sort.key === c.key ? (sort.dir > 0 ? " ↑" : " ↓") : ""}</button>
+                  </th>`).join("")}
+                <th class="px-3 py-2 text-right font-normal">
+                  <button id="extra-toggle" class="px-2 py-0.5 rounded-full border border-neutral-300 hover:bg-neutral-100 text-neutral-600" title="Via, stages, weight, gain, status, returned">${showExtra ? "− less" : `+ ${nExtra} more`}</button>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map(i => {
+                const muted = i.status === "exited" || i.status === "written_off";
+                const flag = i.status === "exited" ? "exited" : i.status === "written_off" ? "written off" : i.kind === "fund" ? "fund" : "";
+                const pend = i.status === "pending";
+                return `
+                <tr class="border-t border-neutral-100 group ${muted ? "text-neutral-500" : ""}">
+                  ${VIS.map((c, n) => {
+                    // Funds have no company valuation or stage; worth is the NAV from their statement.
+                    if (i.kind === "fund" && FUND_NA.has(c.key)) return `<td class="px-3 py-2.5 text-xs text-neutral-300 ${c.extra ? "bg-stone-50" : ""} ${n === firstExtra ? "border-l border-stone-200" : ""}" title="Doesn't apply to a fund">n/a</td>`;
+                    const shown = c.show ? c.show(i) : esc(i[c.key] ?? "");
+                    const badge = n === 0 && pend ? ` <span class="ml-1 text-[11px] uppercase tracking-wide border border-dashed border-amber-400 bg-amber-50 text-amber-800 rounded px-1">pending</span>`
+                      : n === 0 && flag ? ` <span class="ml-1 text-[11px] uppercase tracking-wide border border-neutral-300 text-neutral-500 rounded px-1">${flag}</span>` : "";
+                    return `<td ${c.edit ? `data-cell="${c.key}" data-id="${i.id}"` : ""} class="px-3 py-2.5 ${n === 0 ? "sticky left-0 z-10 bg-white group-hover:bg-neutral-50 pl-5 font-medium" : ""} ${c.extra ? "bg-stone-50" : ""} ${n === firstExtra ? "border-l border-stone-200" : ""} ${c.right ? "text-right tabular-nums" : ""} ${c.tone ? toneOf(i) : c.cls || ""} ${c.edit ? "cursor-pointer hover:bg-neutral-100/70" : ""} ${n === 0 && i.status === "written_off" ? "line-through" : ""}">${shown || `<span class="text-neutral-300">—</span>`}${badge}</td>`;
+                  }).join("")}
+                  <td class="pr-4 pl-2 text-right whitespace-nowrap">
+                    ${i.kind === "fund" ? `<span class="inline-block w-7"></span>` : `<button data-lookup="${i.id}" title="Look up latest valuation" class="w-7 h-7 rounded-md text-neutral-400 hover:text-neutral-900 hover:bg-neutral-100 ${isLookingUp(i) ? "!text-violet-600" : ""}"><span class="inline-block ${isLookingUp(i) ? "animate-spin" : ""}">↻</span></button>`}
+                    <button data-del="${i.id}" title="Delete" class="w-7 h-7 rounded-md text-neutral-400 hover:text-rose-600 hover:bg-rose-50 opacity-0 group-hover:opacity-100 focus:opacity-100">×</button>
+                  </td>
+                </tr>`;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>` : `<div class="p-8 text-center text-sm text-neutral-500 border-t border-neutral-100">Nothing matches these filters.</div>`);
+
+      const root = $("investments");
+      root.querySelectorAll("[data-sort]").forEach(b => b.onclick = () => {
+        const k = b.dataset.sort;
+        // Same column flips direction; a new column starts high-to-low (A–Z for text).
+        sort = sort.key === k ? { key: k, dir: -sort.dir } : { key: k, dir: TEXT_FIRST_ASC.has(k) ? 1 : -1 };
+        store("portfolio.sort2", sort);
+        drawInvestments();
+      });
+      root.querySelectorAll("[data-filter]").forEach(b => b.onclick = () => {
+        const k = b.dataset.filter, v = b.dataset.v;
+        filters[k] = v;
+        // Funds have no stage, so "Funds" and a stage filter would always show nothing together.
+        if (k === "type" && v === "fund") filters.stage = "all";
+        if (k === "stage" && v !== "all" && filters.type === "fund") filters.type = "all";
+        store("portfolio.filters", filters); drawInvestments();
+      });
+      $("extra-toggle") && ($("extra-toggle").onclick = () => { showExtra = !showExtra; store("portfolio.showExtra", showExtra); drawInvestments(); });
+      root.querySelectorAll("[data-cell]").forEach(td => td.onclick = e => { if (!e.target.closest("a")) editCell(td); });
+      root.querySelectorAll("[data-lookup]").forEach(b => b.onclick = () => lookupRow(+b.dataset.lookup));
+      root.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
+        const i = investments.find(x => x.id === +b.dataset.del);
+        if (!confirm(`Delete ${i.company}?`)) return;
+        await api(`/api/portfolio/investments/${i.id}`, "DELETE");
+        investments = investments.filter(x => x.id !== i.id); drawAll();
+      });
+    }
+
+    async function saveField(id, field, value) {
+      const body = { [field]: value };
+      // Dating a pending row today or earlier means the money went out: it's no longer pending.
+      const cur = investments.find(x => x.id === id);
+      const today = new Date().toLocaleDateString("en-CA");
+      if (field === "invested_on" && value && value <= today && cur?.status === "pending") body.status = "active";
+      const row = await api(`/api/portfolio/investments/${id}`, "PUT", body);
+      investments = investments.map(x => x.id === id ? row : x);
+      toast("Saved"); drawTotals(); drawPacing(); drawInvestments();
+    }
+
+    // Shared popup shell, positioned under a cell. Closes on outside click, scroll or Esc.
+    function popup(td, width, html) {
+      document.getElementById("cell-popup")?.remove();
+      const r = td.getBoundingClientRect();
+      const el = document.createElement("div");
+      el.id = "cell-popup";
+      el.className = "fixed z-50 bg-white border border-neutral-200 rounded-xl shadow-lg p-1.5 text-sm";
+      el.style.width = width + "px";
+      el.style.left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8)) + "px";
+      el.style.top = Math.max(8, Math.min(r.bottom + 4, window.innerHeight - 340)) + "px";
+      el.innerHTML = html;
+      document.body.appendChild(el);
+      td.classList.add("bg-neutral-100");
+      return el;
+    }
+    function onDismiss(el, cancel) {
+      const outside = e => { if (!el.contains(e.target)) cancel(); };
+      const scroll = e => { if (!el.contains(e.target)) cancel(); };
+      document.addEventListener("mousedown", outside, true);
+      window.addEventListener("scroll", scroll, true);
+      el.addEventListener("keydown", e => { if (e.key === "Escape") cancel(); });
+      return () => { document.removeEventListener("mousedown", outside, true); window.removeEventListener("scroll", scroll, true); el.remove(); };
+    }
+
+    // Pick-one menu: click an option, clear it, or type a new one and press Enter.
+    function pickMenu(td, menuKey, current, done) {
+      const m = MENUS[menuKey]();
+      const el = popup(td, 240, `
+        <div class="max-h-64 overflow-y-auto">
+          ${m.options.map(([v, label]) => `
+            <button data-v="${esc(v)}" class="w-full flex items-center justify-between px-2 py-1.5 rounded-lg hover:bg-neutral-100 text-left">
+              ${m.pill(v)}<span class="text-neutral-500">${v === current ? "✓" : ""}</span>
+            </button>`).join("") || `<div class="px-2 py-1.5 text-xs text-neutral-500">Nothing yet — type below</div>`}
+        </div>
+        ${m.allowNew ? `<input placeholder="+ New, then Enter" class="mt-1 w-full px-2 py-1.5 rounded-lg border border-neutral-200 outline-none focus:border-neutral-400" />` : ""}
+        ${current && !m.noClear ? `<button data-v="" class="mt-1 w-full px-2 py-1 rounded-lg text-left text-xs text-neutral-500 hover:bg-neutral-100">Clear</button>` : ""}`);
+      let closed = false;
+      const close = v => { if (closed) return; closed = true; cleanup(); done(v); };
+      const cleanup = onDismiss(el, () => close(undefined));
+      el.querySelectorAll("[data-v]").forEach(b => b.onclick = () => close(b.dataset.v));
+      const inp = el.querySelector("input");
+      if (inp) {
+        inp.focus();
+        inp.onkeydown = e => { if (e.key === "Enter" && inp.value.trim()) close(inp.value.trim()); };
+      }
+    }
+
+    // Longer text (why I invested): a small text box. Click away or ⌘↵ saves, Esc cancels.
+    function textPopup(td, current, done) {
+      const el = popup(td, 340, `
+        <textarea rows="5" class="w-full px-2 py-1.5 rounded-lg border border-neutral-200 outline-none focus:border-neutral-400 resize-y" placeholder="Why I invested">${esc(current)}</textarea>
+        <div class="px-1 pt-1 text-xs text-neutral-500">Click away or ⌘↵ to save · Esc to cancel</div>`);
+      const ta = el.querySelector("textarea");
+      let closed = false;
+      const close = v => { if (closed) return; closed = true; cleanup(); done(v); };
+      const cleanup = onDismiss(el, () => close(ta.value));
+      el.addEventListener("keydown", e => {
+        if (e.key === "Escape") { e.stopPropagation(); close(undefined); }
+        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) close(ta.value);
+      }, true);
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+    }
+
+    // Click a cell to edit it right there. Enter or click away saves, Esc cancels, Tab moves along the row.
+    function editCell(td) {
+      const id = +td.dataset.id, field = td.dataset.cell;
+      const col = COLUMNS.find(c => c.key === field);
+      const i = investments.find(x => x.id === id);
+      const raw = i[field] ?? "";
+      let done = false;
+      const finish = async (value, move) => {
+        if (done) return; done = true;
+        if (id === newRowId && field === "company") {
+          const named = value !== undefined && String(value).trim() && String(value).trim() !== "New company";
+          if (!named) {
+            newRowId = null;
+            await api(`/api/portfolio/investments/${id}`, "DELETE");
+            investments = investments.filter(x => x.id !== id);
+            return drawAll();
+          }
+        }
+        if (value !== undefined && String(value).trim() !== String(raw)) {
+          try { await saveField(id, field, String(value).trim()); } catch { drawInvestments(); }
+        } else drawInvestments();
+        if (move) {
+          const cells = [...$("investments").querySelectorAll(`[data-id="${id}"][data-cell]`)];
+          const next = cells[cells.findIndex(c => c.dataset.cell === field) + move];
+          if (next) editCell(next);
+        }
+      };
+      if (col.edit.startsWith("menu:")) return pickMenu(td, col.edit.slice(5), raw, v => finish(v));
+      if (col.edit === "long") return textPopup(td, raw, v => finish(v));
+
+      // Inline input floats over the cell instead of living inside it, so no column changes width.
+      document.getElementById("cell-editor")?.remove();
+      const type = col.edit === "date" ? "date" : "text";
+      const r = td.getBoundingClientRect();
+      const w = Math.max(r.width, type === "date" ? 170 : 110);
+      const inp = document.createElement("input");
+      inp.id = "cell-editor";
+      inp.type = type;
+      if (col.edit === "num") inp.inputMode = "numeric";
+      inp.value = raw;
+      inp.className = `fixed z-40 px-3 rounded-md border border-neutral-400 bg-white text-sm shadow-md outline-none ring-2 ring-neutral-200 ${col.right ? "text-right" : ""}`;
+      Object.assign(inp.style, {
+        top: r.top + "px", height: r.height + "px", width: w + "px",
+        left: Math.min(col.right ? r.right - w : r.left, window.innerWidth - w - 8) + "px",
+      });
+      document.body.appendChild(inp);
+      const onScroll = () => inp.blur();
+      const close = () => { inp.remove(); window.removeEventListener("scroll", onScroll, true); };
+      window.addEventListener("scroll", onScroll, true);
+      inp.focus();
+      if (type === "text") inp.select();
+      inp.addEventListener("keydown", e => {
+        if (e.key === "Enter") { e.preventDefault(); const v = inp.value; inp.onblur = null; close(); finish(v); }
+        else if (e.key === "Escape") { e.preventDefault(); inp.onblur = null; close(); finish(undefined); }
+        else if (e.key === "Tab") { e.preventDefault(); const v = inp.value; inp.onblur = null; close(); finish(v, e.shiftKey ? -1 : 1); }
+      });
+      inp.onblur = () => { const v = inp.value; close(); finish(v); };
+    }
+
+    // ---------- valuation lookups (web search via Claude; proposals only until you Apply) ----------
+    function parseUsd(s) {
+      if (s == null) return null;
+      const m = String(s).replace(/,/g, "").match(/([\d.]+)\s*([kmbt])?/i);
+      if (!m) return null;
+      const n = parseFloat(m[1]) * ({ k: 1e3, m: 1e6, b: 1e9, t: 1e12 }[(m[2] || "").toLowerCase()] || 1);
+      return n >= 1e5 ? n : null; // ignore stray small numbers ("Series 2", "MFN")
+    }
+    // ≈ worth if the stake simply re-priced with the company. Ignores dilution, so it's optimistic early on.
+    function impliedWorth(i, p) {
+      const entry = parseUsd(i.entry_valuation), now = p.valuation_usd || parseUsd(p.valuation);
+      return entry && now && i.amount ? Math.round(i.amount * now / entry) : null;
+    }
+    let review = null; // { groups: [{ids, company, state, data, error, accept}], alsoWorth }
+
+    const companyKey = i => (i.company || "").toLowerCase();
+    const isLookingUp = i => !!review?.groups.some(g => g.key === companyKey(i) && g.state === "running");
+
+    // One row's ↻: runs on its own, in parallel with any others, and lands in the review panel.
+    // Rows of the same company (e.g. two checks into the same company) share one lookup.
+    async function lookupRow(id) {
+      const i = investments.find(x => x.id === id);
+      if (!i || isLookingUp(i)) return;
+      if (!review) review = { groups: [], alsoWorth: true };
+      const key = companyKey(i);
+      let g = review.groups.find(g => g.key === key);
+      if (!g) { g = { key, company: i.company }; review.groups.push(g); }
+      Object.assign(g, {
+        ids: investments.filter(x => companyKey(x) === key).map(x => x.id),
+        state: "running", data: null, error: null, accept: false,
+      });
+      drawReview(); drawInvestments();
+      try {
+        g.data = await api(`/api/portfolio/investments/${id}/lookup`, "POST");
+        g.accept = !!g.data.found;
+      } catch (e) { g.error = e.message || "failed"; }
+      g.state = "done";
+      drawReview(); drawInvestments();
+    }
+
+    function drawReview() {
+      const el = $("review");
+      // Room under the page while the panel is open, so the last rows can scroll above it.
+      if (!review) { el.classList.add("hidden"); document.body.style.paddingBottom = ""; return; }
+      el.classList.remove("hidden");
+      requestAnimationFrame(() => { document.body.style.paddingBottom = el.offsetHeight + 32 + "px"; });
+      const done = review.groups.filter(g => g.state === "done").length;
+      const accepted = review.groups.filter(g => g.accept).length;
+      el.innerHTML = `
+        <div class="px-3 py-2 flex flex-wrap items-center justify-between gap-2 border-b border-violet-200">
+          <div class="text-sm font-medium text-violet-900">Valuation lookups <span class="font-normal text-violet-600 text-xs">${done}/${review.groups.length} done${done < review.groups.length ? " · ~40s each" : ""}</span></div>
+          <div class="flex items-center gap-3 text-xs">
+            <label class="flex items-center gap-1.5" title="Value now ≈ amount × (valuation now ÷ valuation when you invested). Ignores dilution."><input type="checkbox" id="also-worth" ${review.alsoWorth ? "checked" : ""}> Also update Value now (≈)</label>
+            <button id="apply-review" class="px-2.5 py-1 rounded-lg bg-neutral-900 text-white disabled:opacity-40" ${accepted ? "" : "disabled"}>Apply ${accepted || ""}</button>
+            <button id="close-review" class="text-neutral-500 hover:text-neutral-900">Dismiss</button>
+          </div>
+        </div>
+        <ul class="divide-y divide-violet-100 max-h-[50vh] overflow-y-auto">
+          ${review.groups.map((g, n) => {
+            const i = investments.find(x => x.id === g.ids[0]);
+            const cur = [i.current_stage, shortVal(i.current_valuation)].filter(Boolean).join(" · ") || [i.entry_stage, shortVal(i.entry_valuation)].filter(Boolean).join(" · ") + " (entry)";
+            const p = g.data;
+            // One compact line: company · valuation · date · source, plus a short caveat if there is one.
+            const asOf = p?.as_of ? monthYr(p.as_of.length === 7 ? p.as_of + "-01" : p.as_of) : "";
+            let body;
+            if (g.state !== "done") body = `<span class="text-neutral-500">${g.state === "running" ? "Searching…" : "Queued"}</span>`;
+            else if (g.error) body = `<span class="text-rose-600">${esc(g.error)}</span>`;
+            else if (!p.found) body = `<span class="text-neutral-500">Nothing newer</span>`;
+            else body = `
+              <span class="font-medium">${esc(shortVal(p.valuation) || "—")}</span>
+              ${asOf ? `<span class="text-neutral-500">${esc(asOf)}</span>` : ""}
+              ${p.source_url ? `<a href="${esc(p.source_url)}" target="_blank" rel="noopener" class="text-teal-700 hover:underline">source</a>` : ""}
+              ${p.note ? `<span class="px-1.5 rounded bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-200">${esc(p.note)}</span>` : ""}`;
+            return `
+              <li class="px-3 py-2 flex items-center gap-2 text-xs">
+                <input type="checkbox" data-accept="${n}" ${g.accept ? "checked" : ""} ${g.state === "done" && p?.found ? "" : "disabled"}>
+                <span class="font-medium text-sm w-32 truncate shrink-0">${esc(g.company)}</span>
+                <span class="min-w-0 flex flex-wrap items-center gap-x-2">${body}</span>
+              </li>`;
+          }).join("")}
+        </ul>`;
+      $("also-worth").onchange = e => { review.alsoWorth = e.target.checked; };
+      el.querySelectorAll("[data-accept]").forEach(c => c.onchange = () => { review.groups[+c.dataset.accept].accept = c.checked; drawReview(); });
+      $("close-review").onclick = () => { review = null; drawReview(); };
+      $("apply-review").onclick = async () => {
+        for (const g of review.groups.filter(g => g.accept)) {
+          for (const id of g.ids) {
+            const i = investments.find(x => x.id === id), p = g.data;
+            const body = { current_valuation: p.valuation, current_stage: p.stage, valuation_as_of: p.as_of, valuation_source: p.source_url };
+            const w = impliedWorth(i, p);
+            if (review.alsoWorth && w != null) body.current_value = w;
+            const row = await api(`/api/portfolio/investments/${id}`, "PUT", body);
+            investments = investments.map(x => x.id === id ? row : x);
+          }
+          g.accept = false; g.applied = true;
+        }
+        toast("Applied");
+        review.groups = review.groups.filter(g => !g.applied);
+        if (!review.groups.length) review = null;
+        drawAll(); drawReview();
+      };
+    }
+
+
+    // + Add puts a new row at the top of the grid, dated today, with Company open for typing.
+    // Esc before naming it removes the row again.
+    let newRowId = null;
+    $("add-inv-btn").onclick = async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      const row = await api("/api/portfolio/investments", "POST", { company: "New company", invested_on: today, kind: "direct", status: "active" });
+      investments.push(row);
+      newRowId = row.id;
+      filters = { year: "all", stage: "all", type: "all" }; store("portfolio.filters", filters);
+      drawAll();
+      const td = $("investments").querySelector(`[data-id="${row.id}"][data-cell="company"]`);
+      td.scrollIntoView({ block: "center" });
+      // Open after the scroll settles: scrolling closes an open editor.
+      setTimeout(() => editCell($("investments").querySelector(`[data-id="${row.id}"][data-cell="company"]`)), 120);
+    };
+
+    // ---------- simple grouped lists (pipeline, forward-to) ----------
+    // Click an item to edit its name/note/group; type in the box at the bottom to add.
+    // Tracking: my guess at when someone might start a company. Tracking sorts soonest first.
+    const TIMINGS = ["Now", "3 mo+", "6 mo+", "1 yr+", "2 yr+", "Someday"];
+    const timingRank = t => { const i = TIMINGS.indexOf(t); return i < 0 ? TIMINGS.length : i; };
+    // How promising I think they are. Breaks ties within the same timing (High first).
+    const POTENTIALS = ["High", "Medium", "Low"];
+    const potentialRank = p => { const i = POTENTIALS.indexOf(p); return i < 0 ? POTENTIALS.length : i; };
+    const POTENTIAL_CLS = { High: "bg-violet-50 text-violet-800 ring-violet-200", Medium: "bg-sky-50 text-sky-800 ring-sky-200", Low: "bg-neutral-100 text-neutral-600 ring-neutral-200" };
+    const potentialPill = p => p ? `<span class="shrink-0 px-1.5 py-0.5 rounded-full text-[11px] ring-1 ring-inset ${POTENTIAL_CLS[p] || POTENTIAL_CLS.Low}">${esc(p)}</span>` : "";
+    const timingPill = t => t ? `<span class="shrink-0 px-1.5 py-0.5 rounded-full text-[11px] ring-1 ring-inset ${t === "Now" ? "bg-emerald-50 text-emerald-800 ring-emerald-200" : "bg-neutral-100 text-neutral-700 ring-neutral-200"}">${esc(t)}</span>` : "";
+
+    function drawGroupedList(el, table, groupField, groups, items, setItems) {
+      const hasTiming = g => table === "pipeline" && g === "tracking";
+      el.innerHTML = groups.map(([g, label]) => {
+        let mine = items.filter(x => x[groupField] === g);
+        if (hasTiming(g)) mine = [...mine].sort((a, b) => timingRank(a.timing) - timingRank(b.timing) || potentialRank(a.potential) - potentialRank(b.potential));
+        return `
+          <div>
+            <div class="text-sm font-medium mb-1.5">${label} <span class="text-neutral-500 font-normal text-xs">${mine.length}</span></div>
+            <ul class="space-y-1">
+              ${mine.map(x => `
+                <li data-id="${x.id}" class="item rounded-lg px-2 py-1 -mx-2 hover:bg-neutral-50 cursor-pointer">
+                  <div class="text-sm flex items-start justify-between gap-2"><span>${esc(x.name)}</span>${hasTiming(g) ? `<span class="flex gap-1">${potentialPill(x.potential)}${timingPill(x.timing)}</span>` : ""}</div>
+                  ${x.note ? `<div class="text-xs text-neutral-500">${esc(x.note)}</div>` : ""}
+                </li>`).join("")}
+            </ul>
+            <input data-add="${g}" class="fld mt-1.5 !py-1 !text-xs" placeholder="+ Add" />
+          </div>`;
+      }).join("");
+      el.querySelectorAll("[data-add]").forEach(inp => inp.onkeydown = async e => {
+        if (e.key !== "Enter" || !inp.value.trim()) return;
+        const row = await api(`/api/portfolio/${table}`, "POST", { name: inp.value.trim(), [groupField]: inp.dataset.add });
+        setItems([...items, row]);
+        el.querySelector(`[data-add="${inp.dataset.add}"]`).focus();
+      });
+      el.querySelectorAll(".item").forEach(li => li.onclick = () => {
+        if (li.querySelector("input")) return;
+        const x = items.find(i => i.id === +li.dataset.id);
+        li.classList.remove("hover:bg-neutral-50", "cursor-pointer");
+        li.classList.add("bg-neutral-50");
+        li.innerHTML = `
+          <input data-f="name" class="fld !py-1 mb-1" value="${esc(x.name)}" />
+          <input data-f="note" class="fld !py-1 !text-xs mb-1" value="${esc(x.note)}" placeholder="Note" />
+          ${hasTiming(x[groupField]) ? `<div class="flex flex-wrap items-center gap-1 mb-1.5 text-[11px]"><span class="text-neutral-500 mr-0.5">Starts</span>${TIMINGS.map(t => `<button type="button" data-timing="${t}" class="px-1.5 py-0.5 rounded-full border ${x.timing === t ? "bg-neutral-900 text-white border-neutral-900" : "bg-white border-neutral-300 text-neutral-700"}">${t}</button>`).join("")}</div>
+          <div class="flex flex-wrap items-center gap-1 mb-1.5 text-[11px]"><span class="text-neutral-500 mr-0.5">Potential</span>${POTENTIALS.map(t => `<button type="button" data-potential="${t}" class="px-1.5 py-0.5 rounded-full border ${x.potential === t ? "bg-neutral-900 text-white border-neutral-900" : "bg-white border-neutral-300 text-neutral-700"}">${t}</button>`).join("")}</div>` : ""}
+          <div class="flex items-center gap-2 text-xs">
+            <select data-f="${groupField}" class="fld !py-1 !text-xs">${groups.map(([g, l]) => `<option value="${g}" ${g === x[groupField] ? "selected" : ""}>${l}</option>`).join("")}</select>
+            <button data-done class="text-neutral-500 hover:text-neutral-900">Done</button>
+            <button data-del class="text-neutral-500 hover:text-rose-600">Delete</button>
+          </div>`;
+        li.querySelector("[data-f=name]").focus();
+        let current = x;
+        li.querySelectorAll("[data-f]").forEach(inp => inp.onchange = async () => {
+          current = await api(`/api/portfolio/${table}/${x.id}`, "PUT", { [inp.dataset.f]: inp.value });
+          toast("Saved");
+          if (inp.tagName === "SELECT") setItems(items.map(i => i.id === x.id ? current : i));
+          else if (inp.dataset.f === "amount") { Object.assign(x, current); drawTotals(); drawPacing(); }
+        });
+        li.querySelectorAll("[data-potential]").forEach(b => b.onclick = async e => {
+          e.stopPropagation();
+          const v = current.potential === b.dataset.potential ? "" : b.dataset.potential; // click again to clear
+          current = await api(`/api/portfolio/${table}/${x.id}`, "PUT", { potential: v });
+          li.querySelectorAll("[data-potential]").forEach(c => c.className = `px-1.5 py-0.5 rounded-full border ${current.potential === c.dataset.potential ? "bg-neutral-900 text-white border-neutral-900" : "bg-white border-neutral-300 text-neutral-700"}`);
+          toast("Saved");
+        });
+        li.querySelectorAll("[data-timing]").forEach(b => b.onclick = async e => {
+          e.stopPropagation();
+          const v = current.timing === b.dataset.timing ? "" : b.dataset.timing; // click again to clear
+          current = await api(`/api/portfolio/${table}/${x.id}`, "PUT", { timing: v });
+          li.querySelectorAll("[data-timing]").forEach(c => c.className = `px-1.5 py-0.5 rounded-full border ${current.timing === c.dataset.timing ? "bg-neutral-900 text-white border-neutral-900" : "bg-white border-neutral-300 text-neutral-700"}`);
+          toast("Saved");
+        });
+        li.querySelector("[data-done]").onclick = e => { e.stopPropagation(); setItems(items.map(i => i.id === x.id ? current : i)); };
+        li.querySelector("[data-del]").onclick = async e => {
+          e.stopPropagation();
+          await api(`/api/portfolio/${table}/${x.id}`, "DELETE");
+          setItems(items.filter(i => i.id !== x.id));
+        };
+      });
+    }
+    function drawPipeline() {
+      drawGroupedList($("pipeline"), "pipeline", "list", PIPELINE_LISTS, pipeline, v => { pipeline = v; drawAll(); });
+    }
+    function drawForward() {
+      drawGroupedList($("forward"), "forward_to", "kind", FORWARD_KINDS, forward, v => { forward = v; drawForward(); });
+    }
+
+    $("demo-link").href = DEMO ? "/portfolio" : "/portfolio?demo=1";
+    $("demo-link").textContent = DEMO ? "Exit demo" : "Demo";
+    if (DEMO) $("csv-btn").remove();
+    $("demo-link").title = DEMO ? "Back to your real data" : "Sample data for screenshots. Nothing real is loaded.";
+
+    // ---------- vs. public markets ----------
+    // Each check, on its date, put into the index instead (dividends reinvested), valued today,
+    // compared with what the checks are worth now plus cash returned. Ratio > 1 means you beat it.
+    const BENCH = [["sp500", "S&P 500"], ["nasdaq", "Nasdaq-100"], ["mag7", "Mag 7"], ["nvda", "Nvidia"]];
+    let benchKey = stored("portfolio.bench", "sp500");
+    const benchCache = {};
+    // Only public prices come back, so the demo can use this too without touching real data.
+    const benchFetch = (key, dates) => fetch(`/api/benchmark/${key}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dates }),
+    }).then(async r => { const d = await r.json(); if (!r.ok) throw new Error(d.error); return d; });
+
+    async function drawBenchmark() {
+      $("bench-pills").innerHTML = BENCH.map(([k, l]) => `<button data-bench="${k}" class="px-2.5 py-1 rounded-full border ${benchKey === k ? "bg-neutral-900 text-white border-neutral-900" : "bg-white border-neutral-300 text-neutral-700 hover:bg-neutral-100"}">${l}</button>`).join("");
+      $("bench-pills").querySelectorAll("[data-bench]").forEach(b => b.onclick = () => { benchKey = b.dataset.bench; store("portfolio.bench", benchKey); drawBenchmark(); });
+      const flows = investments.filter(i => i.status !== "pending" && i.invested_on && paidIn(i) > 0);
+      const undated = investments.filter(i => i.status !== "pending" && !i.invested_on).length;
+      if (!flows.length) { $("bench").innerHTML = `<p class="text-sm text-neutral-500">Add dates to your investments to compare.</p>`; return; }
+      const key = benchKey, dates = [...new Set(flows.map(i => i.invested_on))].sort();
+      const ck = key + "|" + dates.join(",");
+      if (!benchCache[ck]) {
+        $("bench").innerHTML = `<p class="text-sm text-neutral-500">Loading prices…</p>`;
+        try { benchCache[ck] = await benchFetch(key, dates); }
+        catch (e) { if (key === benchKey) $("bench").innerHTML = `<p class="text-sm text-rose-600">${esc(e.message || "Couldn't load prices")}</p>`; return; }
+      }
+      if (key !== benchKey) return;
+      const d = benchCache[ck];
+      const growth = date => d.symbols.reduce((a, s) => a + d.latest[s] / d.at[date][s], 0) / d.symbols.length;
+      const paid = flows.reduce((a, i) => a + paidIn(i), 0);
+      const yours = flows.reduce((a, i) => a + worthOf(i) + (i.returned || 0), 0);
+      const index = flows.reduce((a, i) => a + paidIn(i) * growth(i.invested_on), 0);
+      const diff = yours - index, ratio = yours / index;
+      const label = BENCH.find(b => b[0] === key)[1];
+      const big = (title, v, sub, cls = "") => `
+        <div><div class="text-sm text-neutral-500">${title}</div>
+        <div class="text-2xl font-semibold tracking-tight tabular-nums ${cls}">${money(v)}</div>
+        <div class="text-xs text-neutral-500 tabular-nums">${sub}</div></div>`;
+      $("bench").innerHTML = `
+        <div class="grid grid-cols-2 sm:grid-cols-3 gap-4">
+          ${big("Your investments now", yours, `${(yours / paid).toFixed(2)}× on ${money(paid)}`)}
+          ${big(`Same dollars in ${label}`, index, `${(index / paid).toFixed(2)}× · same dates`)}
+          <div class="col-span-2 sm:col-span-1"><div class="text-sm text-neutral-500">${diff >= 0 ? "You're ahead by" : "You're behind by"}</div>
+            <div class="text-2xl font-semibold tracking-tight tabular-nums ${diff >= 0 ? "text-emerald-700" : "text-rose-600"}">${money(Math.abs(diff))}</div>
+            <div class="text-xs text-neutral-500 tabular-nums" title="Public market equivalent: your value ÷ the index's. Above 1.00 means you beat it.">PME ${ratio.toFixed(2)}</div></div>
+        </div>
+        <p class="text-xs text-neutral-500 mt-3">Index prices from ${esc(monthYr(d.as_of))}, counting dividends.${key === "mag7" ? " Mag 7 is an equal-weight basket picked with hindsight, so it's a tough bar." : ""}${undated ? ` ${undated} investment${undated === 1 ? "" : "s"} without a date ${undated === 1 ? "isn't" : "aren't"} included.` : ""} Your side is the Value column, so it's only as up to date as those numbers.</p>`;
+    }
+
+    // ---------- evaluating: live deals I'm deciding on ----------
+    // Every cell is a live input: click and type, saves on blur. Soonest deadline first.
+    // Commit -> pending investment; Pass -> Pipeline/Passed.
+    const EVAL_COLS = [
+      ["company", "Company", "min-w-[9rem] font-medium"], ["round", "Round", "w-24"], ["valuation", "Valuation", "w-24"],
+      ["check_size", "My check", "w-24 text-right tabular-nums"], ["deadline", "Decide by", "w-36"], ["source", "Source", "w-28"],
+      ["next_step", "Next step", "min-w-[11rem]"], ["note", "Notes", "min-w-[14rem]"],
+    ];
+    function daysLeft(d) {
+      if (!d) return null;
+      const t = new Date(); t.setHours(0, 0, 0, 0);
+      return Math.round((new Date(d + "T00:00:00") - t) / 864e5);
+    }
+    function deadlinePill(d) {
+      const n = daysLeft(d);
+      if (n == null) return "";
+      const [txt, cls] = n < 0 ? [`${-n}d over`, "bg-rose-50 text-rose-800 ring-rose-200"]
+        : n === 0 ? ["today", "bg-amber-50 text-amber-800 ring-amber-200"]
+        : [`${n}d`, n <= 7 ? "bg-amber-50 text-amber-800 ring-amber-200" : "bg-neutral-100 text-neutral-700 ring-neutral-200"];
+      return `<span class="shrink-0 px-1.5 py-0.5 rounded-full text-[11px] ring-1 ring-inset ${cls}">${txt}</span>`;
+    }
+    const evalShow = (f, v) => f === "check_size" ? (v == null ? "" : money(v)) : (v ?? "");
+    function drawEvaluating() {
+      const rows = [...evaluating].sort((a, b) => (a.deadline || "9999").localeCompare(b.deadline || "9999"));
+      $("evaluating").innerHTML = `
+        <table class="w-full text-sm">
+          <thead><tr class="text-left text-xs text-neutral-500">
+            ${EVAL_COLS.map(([, label, cls]) => `<th class="font-normal whitespace-nowrap px-1.5 pb-1 ${cls.includes("text-right") ? "text-right" : ""}">${label}</th>`).join("")}<th></th>
+          </tr></thead>
+          <tbody>
+            ${rows.map(x => `<tr data-id="${x.id}" class="border-t border-neutral-100">
+              ${EVAL_COLS.map(([f, , cls]) => `<td class="py-0.5 ${cls}">${f === "deadline"
+                ? `<div class="flex items-center gap-1"><input data-f="deadline" type="date" class="cell" value="${esc(x.deadline)}" /><span data-pill>${deadlinePill(x.deadline)}</span></div>`
+                : `<input data-f="${f}" class="cell ${cls.includes("text-right") ? "text-right" : ""}" value="${esc(evalShow(f, x[f]))}" />`}</td>`).join("")}
+              <td class="py-0.5 pl-2 whitespace-nowrap text-xs">
+                <button data-commit class="px-2 py-0.5 rounded-md bg-neutral-900 text-white hover:bg-neutral-800" title="Add to Investments as pending">Commit</button>
+                <button data-pass class="px-2 py-0.5 rounded-md border border-neutral-300 bg-white hover:bg-neutral-100" title="Move to Pipeline → Passed">Pass</button>
+                <button data-del class="px-1 text-neutral-400 hover:text-rose-600" title="Delete">✕</button>
+              </td>
+            </tr>`).join("")}
+            <tr class="border-t border-neutral-100"><td class="py-0.5" colspan="${EVAL_COLS.length + 1}">
+              <input id="eval-add" class="cell !w-64 text-neutral-500" placeholder="+ Add deal" />
+            </td></tr>
+          </tbody>
+        </table>`;
+
+      $("evaluating").querySelectorAll("tr[data-id]").forEach(tr => {
+        const id = +tr.dataset.id;
+        const x = () => evaluating.find(r => r.id === id);
+        tr.querySelectorAll("[data-f]").forEach(inp => {
+          inp.onkeydown = e => { if (e.key === "Enter") inp.blur(); };
+          inp.onchange = async () => {
+            const row = await api(`/api/portfolio/evaluating/${id}`, "PUT", { [inp.dataset.f]: inp.value });
+            evaluating = evaluating.map(r => r.id === id ? row : r);
+            if (inp.dataset.f === "check_size") inp.value = evalShow("check_size", row.check_size);
+            if (inp.dataset.f === "deadline") tr.querySelector("[data-pill]").innerHTML = deadlinePill(row.deadline);
+            toast("Saved");
+          };
+        });
+        tr.querySelector("[data-commit]").onclick = async () => {
+          const d = x();
+          const row = await api("/api/portfolio/investments", "POST", {
+            company: d.company, kind: "direct", status: "pending", amount: d.check_size,
+            entry_stage: d.round, entry_valuation: d.valuation, source: d.source, why: d.note,
+          });
+          await api(`/api/portfolio/evaluating/${id}`, "DELETE");
+          investments = [...investments, row]; evaluating = evaluating.filter(r => r.id !== id);
+          toast(`${d.company} added as pending`); drawAll();
+        };
+        tr.querySelector("[data-pass]").onclick = async () => {
+          const d = x();
+          const terms = [d.round, shortVal(d.valuation)].filter(Boolean).join(" @ ");
+          const row = await api("/api/portfolio/pipeline", "POST", { name: d.company, list: "passed", note: [terms, d.note].filter(Boolean).join(" — ") });
+          await api(`/api/portfolio/evaluating/${id}`, "DELETE");
+          pipeline = [...pipeline, row]; evaluating = evaluating.filter(r => r.id !== id);
+          toast(`Passed on ${d.company}`); drawEvaluating(); drawPipeline();
+        };
+        tr.querySelector("[data-del]").onclick = async () => {
+          await api(`/api/portfolio/evaluating/${id}`, "DELETE");
+          evaluating = evaluating.filter(r => r.id !== id); drawEvaluating();
+        };
+      });
+      $("eval-add").onkeydown = async e => {
+        const inp = e.target;
+        if (e.key !== "Enter" || !inp.value.trim()) return;
+        const row = await api("/api/portfolio/evaluating", "POST", { company: inp.value.trim() });
+        evaluating = [...evaluating, row]; drawEvaluating();
+        $("evaluating").querySelector(`tr[data-id="${row.id}"] [data-f=round]`).focus();
+      };
+    }
+
+    function drawAll() { drawTotals(); drawPacing(); drawBenchmark(); drawInvestments(); drawEvaluating(); drawPipeline(); drawForward(); }
+
+    (async () => {
+      [investments, pipeline, forward, evaluating, { rules }] = await Promise.all([
+        api("/api/portfolio/investments"), api("/api/portfolio/pipeline"), api("/api/portfolio/forward_to"),
+        api("/api/portfolio/evaluating"), api("/api/portfolio/settings"),
+      ]);
+      drawAll();
+    })();
+  </script>
+</body>
+</html>

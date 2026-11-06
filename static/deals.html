@@ -1,0 +1,765 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Deals · CRM</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif; }
+    .fld { width: 100%; padding: 0.375rem 0.625rem; border-radius: 0.5rem; border: 1px solid #e5e5e5; background: white; font-size: 0.875rem; }
+    .fld:hover { border-color: #d4d4d4; }
+    .fld:focus { outline: none; border-color: #a3a3a3; box-shadow: 0 0 0 2px #e5e5e5; }
+    textarea.fld { resize: vertical; }
+  </style>
+</head>
+<body class="bg-neutral-50 text-neutral-900 min-h-screen">
+  <div class="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
+    <header class="mb-6">
+      <a href="/" class="text-sm text-teal-700 hover:underline">← Contacts</a>
+      <div class="flex items-end justify-between gap-3 mt-2 flex-wrap">
+        <nav class="flex gap-1 text-sm" id="tabs">
+          <a href="#/" data-tab="deals" class="tab px-3 py-1.5 rounded-lg font-medium">Deals</a>
+          <a href="#/investors" data-tab="investors" class="tab px-3 py-1.5 rounded-lg font-medium">Investors</a>
+        </nav>
+        <div id="header-actions" class="flex gap-2"></div>
+      </div>
+    </header>
+    <main id="app"><div class="p-8 text-center text-neutral-400 text-sm">Loading…</div></main>
+  </div>
+
+  <!-- Modal -->
+  <div id="modal" class="hidden fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center sm:p-4">
+    <div id="modal-card" class="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-xl shadow-2xl flex flex-col max-h-[92vh]"></div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="hidden fixed bottom-5 left-1/2 -translate-x-1/2 sm:left-auto sm:right-5 sm:translate-x-0 z-[60] bg-neutral-900 text-white text-sm px-4 py-2.5 rounded-lg shadow-xl"></div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const app = $("app");
+
+    const STATUS_LABEL = { advising: "Advising", watching: "Watching", evaluating: "Evaluating", committed: "Committed", invested: "Invested", passed: "Passed" };
+    const STATUS_CLS = {
+      advising: "bg-sky-50 text-sky-700 border-sky-200",
+      watching: "bg-neutral-50 text-neutral-600 border-neutral-200",
+      evaluating: "bg-amber-50 text-amber-700 border-amber-200",
+      committed: "bg-violet-50 text-violet-700 border-violet-200",
+      invested: "bg-emerald-50 text-emerald-700 border-emerald-200",
+      passed: "bg-neutral-100 text-neutral-400 border-neutral-200",
+    };
+    const CONV_CLS = {
+      A: "bg-emerald-600 text-white", B: "bg-sky-600 text-white", C: "bg-rose-100 text-rose-700", unrated: "bg-neutral-100 text-neutral-400",
+    };
+    const ASK_LABEL = { my_investment: "My $", angel_intros: "Angel intros", vc_intros: "VC intros", advice: "Advice" };
+    const STAGE_LABEL = { pre_seed: "Pre-seed", seed: "Seed", series_a: "Series A", later: "Later" };
+    const TYPE_LABEL = { angel: "Angel", vc: "VC" };
+    const CLOSE_LABEL = { close_friend: "Close friend", friend: "Friend", friendly: "Friendly", acquaintance: "Acquaintance" };
+    const BAR_LABEL = { only_best: "Only my best (A)", good_or_better: "Good or better (A/B)", anything_relevant: "Anything relevant" };
+    const ACTIVE_LABEL = { very_active: "Very active", active: "Active", occasional: "Occasional", unknown: "Unknown" };
+
+    let OPTS = null;
+    let deals = [];
+    let investors = [];
+    let dealView = localStorage.getItem("crm.dealView") || "table";
+    let statusFilter = localStorage.getItem("crm.dealStatus") || "open";
+    const invFilter = { type: "all", closeness: "all", active: "all", stage: "all", sector: "all", check: "" };
+
+    function escapeHtml(s) {
+      return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    }
+    function money(n) {
+      if (n == null || n === "") return "";
+      n = Number(n);
+      if (n >= 1e6) return "$" + (n / 1e6).toFixed(n % 1e6 ? 1 : 0) + "M";
+      if (n >= 1e3) return "$" + (n / 1e3).toFixed(n % 1e3 ? 1 : 0) + "k";
+      return "$" + n;
+    }
+    function ago(ts) {
+      if (!ts) return "";
+      const d = new Date(ts.replace(" ", "T") + (ts.includes("Z") || ts.includes("+") ? "" : "Z"));
+      const days = Math.floor((Date.now() - d) / 86400000);
+      if (days <= 0) return "today";
+      if (days === 1) return "yesterday";
+      if (days < 30) return `${days}d ago`;
+      if (days < 365) return `${Math.floor(days / 30)}mo ago`;
+      return `${Math.floor(days / 365)}y ago`;
+    }
+    function dealTitle(d) {
+      if (d.company_name) return d.company_name;
+      if (d.founders?.length) return `${d.founders.map(f => f.name).join(" & ")}'s co`;
+      return "Untitled deal";
+    }
+    let toastTimer;
+    function toast(msg, ms = 1600) {
+      $("toast").textContent = msg;
+      $("toast").classList.remove("hidden");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => $("toast").classList.add("hidden"), ms);
+    }
+    async function api(url, opts = {}) {
+      const res = await fetch(url, {
+        ...opts,
+        headers: { "Content-Type": "application/json" },
+        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { toast(data.error || `Error ${res.status}`, 3500); throw new Error(data.error); }
+      return data;
+    }
+    const pill = (label, cls) => `<span class="inline-block px-2 py-0.5 rounded-full border text-[11px] whitespace-nowrap ${cls}">${escapeHtml(label)}</span>`;
+    const statusPill = s => s ? pill(STATUS_LABEL[s], STATUS_CLS[s]) : `<span class="text-neutral-300 text-xs">—</span>`;
+    const convBadge = c => `<span class="inline-flex items-center justify-center min-w-[1.5rem] h-6 px-1.5 rounded-md text-xs font-semibold ${CONV_CLS[c || "unrated"]}">${c && c !== "unrated" ? c : "?"}</span>`;
+
+    // ---------- modal ----------
+    function openModal(html) {
+      $("modal-card").innerHTML = html;
+      $("modal").classList.remove("hidden");
+    }
+    function closeModal() { $("modal").classList.add("hidden"); $("modal-card").innerHTML = ""; }
+    $("modal").addEventListener("click", e => { if (e.target.id === "modal") closeModal(); });
+    document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("modal").classList.contains("hidden")) closeModal(); });
+    const modalHeader = title => `
+      <div class="px-5 py-4 border-b border-neutral-100 flex items-center justify-between shrink-0">
+        <h2 class="text-lg font-semibold">${title}</h2>
+        <button type="button" onclick="closeModal()" class="text-neutral-400 hover:text-neutral-700 text-2xl leading-none">&times;</button>
+      </div>`;
+
+    // ---------- contact picker (search existing, or create inline) ----------
+    // Renders into `container`; calls onPick({id, name, email, phone}) for each pick.
+    function contactPicker(container, { placeholder = "Search contacts…", createLabel = "Founder", onPick, exclude = () => [] }) {
+      container.innerHTML = `
+        <div class="relative">
+          <input type="text" class="fld" placeholder="${placeholder}" autocomplete="off" />
+          <div class="results hidden absolute z-10 left-0 right-0 mt-1 bg-white border border-neutral-200 rounded-lg shadow-lg max-h-64 overflow-y-auto text-sm"></div>
+        </div>`;
+      const input = container.querySelector("input");
+      const results = container.querySelector(".results");
+      let seq = 0, items = [];
+      async function search() {
+        const q = input.value.trim();
+        if (!q) { results.classList.add("hidden"); return; }
+        const my = ++seq;
+        const rows = await fetch(`/api/contacts/search?q=${encodeURIComponent(q)}`).then(r => r.json());
+        if (my !== seq) return;
+        const ex = new Set(exclude());
+        items = rows.filter(r => !ex.has(r.id));
+        const exact = rows.some(r => r.name.toLowerCase() === q.toLowerCase());
+        results.innerHTML = items.map((r, i) => `
+          <button type="button" data-i="${i}" class="block w-full text-left px-3 py-2 hover:bg-neutral-50">
+            ${escapeHtml(r.name)} <span class="text-neutral-400 text-xs">${escapeHtml((r.occupations || []).join(", "))}</span>
+          </button>`).join("") + (exact ? "" : `
+          <button type="button" data-new="1" class="block w-full text-left px-3 py-2 hover:bg-neutral-50 text-teal-700 border-t border-neutral-100">
+            + New contact “${escapeHtml(q)}”
+          </button>`);
+        results.classList.remove("hidden");
+      }
+      input.addEventListener("input", search);
+      input.addEventListener("blur", () => setTimeout(() => results.classList.add("hidden"), 200));
+      input.addEventListener("focus", () => { if (input.value.trim()) search(); });
+      input.addEventListener("keydown", async e => {
+        if (e.key === "Enter" && input.value.trim()) {
+          e.preventDefault(); e.stopPropagation();
+          // Enter on a single match picks it, so adding a deal stays keyboard-fast.
+          if (items.length === 1) pick(items[0]);
+        }
+      });
+      results.addEventListener("click", async e => {
+        const b = e.target.closest("button");
+        if (!b) return;
+        if (b.dataset.new) {
+          const name = input.value.trim();
+          const body = { name, occupations: createLabel ? [createLabel] : [] };
+          const { id } = await api("/api/contacts", { method: "POST", body });
+          toast(`Created contact “${name}”`);
+          pick({ id, name, email: null, phone: null });
+        } else {
+          pick(items[+b.dataset.i]);
+        }
+      });
+      function pick(c) {
+        input.value = ""; results.classList.add("hidden"); items = [];
+        onPick(c);
+        input.focus();
+      }
+      return input;
+    }
+
+    // ---------- Deals list ----------
+    const OPEN = ["advising", "watching", "evaluating", "committed"];
+    function statusMatches(d) {
+      if (statusFilter === "all") return true;
+      if (statusFilter === "open") return !d.status || OPEN.includes(d.status);
+      if (statusFilter === "none") return !d.status;
+      return d.status === statusFilter;
+    }
+
+    async function renderDeals() {
+      $("header-actions").innerHTML = `
+        <div class="flex rounded-lg border border-neutral-300 overflow-hidden text-xs">
+          <button data-v="table" class="dv px-2.5 py-1.5">Table</button>
+          <button data-v="kanban" class="dv px-2.5 py-1.5 border-l border-neutral-300">Board</button>
+        </div>
+        <button id="add-deal" class="px-3 py-1.5 text-sm rounded-lg bg-neutral-900 text-white hover:bg-neutral-800">+ Add deal</button>`;
+      document.querySelectorAll(".dv").forEach(b => {
+        b.className = `dv px-2.5 py-1.5 ${b.dataset.v === "kanban" ? "border-l border-neutral-300 " : ""}${b.dataset.v === dealView ? "bg-neutral-900 text-white" : "bg-white hover:bg-neutral-100"}`;
+        b.onclick = () => { dealView = b.dataset.v; localStorage.setItem("crm.dealView", dealView); renderDeals(); };
+      });
+      $("add-deal").onclick = openAddDeal;
+      deals = await api("/api/deals");
+
+      const counts = { all: deals.length, open: deals.filter(d => !d.status || OPEN.includes(d.status)).length };
+      for (const s of OPTS.statuses) counts[s] = deals.filter(d => d.status === s).length;
+      const filters = [["open", "Open"], ...OPTS.statuses.map(s => [s, STATUS_LABEL[s]]), ["all", "All"]];
+      const filterBar = dealView === "table" ? `
+        <div class="flex flex-wrap gap-1.5 mb-3 text-xs">
+          ${filters.map(([k, l]) => `<button data-sf="${k}" class="sf px-2.5 py-1 rounded-full border ${statusFilter === k ? "bg-neutral-900 text-white border-neutral-900" : "bg-white border-neutral-300 hover:bg-neutral-100"}">${l} <span class="opacity-60">${counts[k] ?? 0}</span></button>`).join("")}
+        </div>` : "";
+
+      if (!deals.length) {
+        app.innerHTML = `<div class="bg-white rounded-xl border border-neutral-200 p-10 text-center text-sm text-neutral-500">No deals yet. <button class="text-teal-700 hover:underline" onclick="openAddDeal()">Add your first one</button>.</div>`;
+        return;
+      }
+      app.innerHTML = filterBar + (dealView === "kanban" ? kanbanHtml() : tableHtml());
+      document.querySelectorAll(".sf").forEach(b => b.onclick = () => { statusFilter = b.dataset.sf; localStorage.setItem("crm.dealStatus", statusFilter); renderDeals(); });
+    }
+
+    function tableHtml() {
+      const rows = deals.filter(statusMatches);
+      if (!rows.length) return `<div class="bg-white rounded-xl border border-neutral-200 p-8 text-center text-sm text-neutral-400">No deals with this status.</div>`;
+      return `
+        <div class="bg-white rounded-xl border border-neutral-200 overflow-hidden">
+          <table class="w-full text-sm">
+            <thead class="text-[11px] uppercase tracking-wide text-neutral-400 border-b border-neutral-100">
+              <tr>
+                <th class="text-left font-medium px-3 py-2">Company</th>
+                <th class="text-left font-medium px-3 py-2 hidden sm:table-cell">Asks</th>
+                <th class="text-left font-medium px-3 py-2">Status</th>
+                <th class="text-center font-medium px-2 py-2" title="Conviction">Conv.</th>
+                <th class="text-right font-medium px-3 py-2 hidden sm:table-cell">My check</th>
+                <th class="text-right font-medium px-3 py-2 hidden md:table-cell">Updated</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-neutral-100">
+              ${rows.map(d => `
+                <tr class="hover:bg-neutral-50 cursor-pointer" onclick="location.hash='#/deal/${d.id}'">
+                  <td class="px-3 py-2.5">
+                    <div class="font-medium">${escapeHtml(dealTitle(d))}</div>
+                    <div class="text-xs text-neutral-500">${escapeHtml(d.company_name ? d.founders.map(f => f.name).join(", ") : (d.one_liner || ""))}</div>
+                  </td>
+                  <td class="px-3 py-2.5 hidden sm:table-cell text-xs text-neutral-600">${(d.asks || []).map(a => ASK_LABEL[a]).join(", ")}</td>
+                  <td class="px-3 py-2.5">${statusPill(d.status)}</td>
+                  <td class="px-2 py-2.5 text-center">${convBadge(d.conviction)}</td>
+                  <td class="px-3 py-2.5 text-right hidden sm:table-cell tabular-nums">${money(d.my_check)}</td>
+                  <td class="px-3 py-2.5 text-right hidden md:table-cell text-xs text-neutral-400">${ago(d.updated_at)}</td>
+                </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>`;
+    }
+
+    function kanbanHtml() {
+      const cols = [...OPTS.statuses.map(s => [s, STATUS_LABEL[s]])];
+      if (deals.some(d => !d.status)) cols.unshift([null, "No status"]);
+      return `
+        <div class="flex gap-3 overflow-x-auto pb-3 -mx-4 px-4 sm:mx-0 sm:px-0 snap-x">
+          ${cols.map(([s, label]) => {
+            const items = deals.filter(d => (d.status || null) === s);
+            return `
+              <div class="shrink-0 w-64 snap-start">
+                <div class="text-xs font-semibold text-neutral-500 mb-2 px-1">${label} <span class="font-normal text-neutral-400">${items.length}</span></div>
+                <div class="space-y-2 min-h-[3rem]">
+                  ${items.map(d => `
+                    <a href="#/deal/${d.id}" class="block bg-white rounded-lg border border-neutral-200 p-3 hover:border-neutral-400">
+                      <div class="flex items-start justify-between gap-2">
+                        <div class="font-medium text-sm">${escapeHtml(dealTitle(d))}</div>
+                        ${convBadge(d.conviction)}
+                      </div>
+                      ${d.one_liner ? `<div class="text-xs text-neutral-500 mt-1 line-clamp-2">${escapeHtml(d.one_liner)}</div>` : ""}
+                      <div class="text-[11px] text-neutral-400 mt-1.5">${(d.asks || []).map(a => ASK_LABEL[a]).join(" · ")}${d.my_check ? ` · ${money(d.my_check)}` : ""}</div>
+                    </a>`).join("")}
+                </div>
+              </div>`;
+          }).join("")}
+        </div>`;
+    }
+
+    function openAddDeal() {
+      const founders = [];
+      const state = { status: null, asks: new Set() };
+      openModal(modalHeader("Add deal") + `
+        <form id="add-deal-form" class="p-5 space-y-4 overflow-y-auto">
+          <div>
+            <label class="block text-xs font-medium text-neutral-600 mb-1">Company</label>
+            <input id="nd-company" class="fld" placeholder="Leave blank if it doesn't have a name yet" autocomplete="off" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-neutral-600 mb-1">Founder(s)</label>
+            <div id="nd-founders" class="flex flex-wrap gap-1.5 mb-1.5"></div>
+            <div id="nd-picker"></div>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-neutral-600 mb-1">Asks <span class="text-neutral-400 font-normal">(optional)</span></label>
+            <div class="flex flex-wrap gap-1.5" id="nd-asks">
+              ${OPTS.asks.map(a => `<button type="button" data-a="${a}" class="px-2.5 py-1 rounded-full border text-xs bg-white border-neutral-300">${ASK_LABEL[a]}</button>`).join("")}
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-neutral-600 mb-1">Status <span class="text-neutral-400 font-normal">(optional)</span></label>
+            <div class="flex flex-wrap gap-1.5" id="nd-status">
+              ${OPTS.statuses.map(s => `<button type="button" data-s="${s}" class="px-2.5 py-1 rounded-full border text-xs bg-white border-neutral-300">${STATUS_LABEL[s]}</button>`).join("")}
+            </div>
+          </div>
+          <div class="flex justify-end gap-2 pt-2">
+            <button type="button" onclick="closeModal()" class="px-3 py-2 text-sm rounded-lg border border-neutral-300 bg-white hover:bg-neutral-50">Cancel</button>
+            <button type="submit" class="px-4 py-2 text-sm rounded-lg bg-neutral-900 text-white hover:bg-neutral-800">Add deal</button>
+          </div>
+        </form>`);
+      const renderFounders = () => {
+        $("nd-founders").innerHTML = founders.map((f, i) => `
+          <span class="inline-flex items-center gap-1 pl-2.5 pr-1 py-0.5 rounded-full bg-neutral-100 text-sm">${escapeHtml(f.name)}
+            <button type="button" data-rm="${i}" class="text-neutral-400 hover:text-neutral-700 px-1">&times;</button></span>`).join("");
+        $("nd-founders").querySelectorAll("[data-rm]").forEach(b => b.onclick = () => { founders.splice(+b.dataset.rm, 1); renderFounders(); });
+      };
+      contactPicker($("nd-picker"), {
+        placeholder: "Search contacts, or type a new name…",
+        onPick: c => { founders.push(c); renderFounders(); },
+        exclude: () => founders.map(f => f.id),
+      });
+      const toggleChips = (wrap, attr, isOn) => wrap.querySelectorAll("button").forEach(b => {
+        b.className = `px-2.5 py-1 rounded-full border text-xs ${isOn(b.dataset[attr]) ? "bg-neutral-900 text-white border-neutral-900" : "bg-white border-neutral-300 hover:bg-neutral-100"}`;
+      });
+      $("nd-asks").onclick = e => { const b = e.target.closest("button"); if (!b) return; state.asks.has(b.dataset.a) ? state.asks.delete(b.dataset.a) : state.asks.add(b.dataset.a); toggleChips($("nd-asks"), "a", a => state.asks.has(a)); };
+      $("nd-status").onclick = e => { const b = e.target.closest("button"); if (!b) return; state.status = state.status === b.dataset.s ? null : b.dataset.s; toggleChips($("nd-status"), "s", s => s === state.status); };
+      $("add-deal-form").onsubmit = async e => {
+        e.preventDefault();
+        const company = $("nd-company").value.trim();
+        if (!company && !founders.length) { toast("Add a company name or a founder"); return; }
+        const { id } = await api("/api/deals", { method: "POST", body: {
+          company_name: company || null, founder_ids: founders.map(f => f.id), asks: [...state.asks], status: state.status,
+        }});
+        closeModal();
+        location.hash = `#/deal/${id}`;
+      };
+      $("nd-company").focus();
+    }
+
+    // ---------- Deal detail ----------
+    let deal = null;
+
+    async function saveDeal(field, value) {
+      deal = await api(`/api/deals/${deal.id}`, { method: "PUT", body: { [field]: value } });
+      toast("Saved");
+    }
+
+    function field(label, inner, hint = "") {
+      return `<div><label class="block text-xs font-medium text-neutral-500 mb-1">${label}${hint ? ` <span class="font-normal text-neutral-400">${hint}</span>` : ""}</label>${inner}</div>`;
+    }
+    const txt = (f, v, ph = "") => `<input class="fld" data-f="${f}" value="${escapeHtml(v ?? "")}" placeholder="${escapeHtml(ph)}" />`;
+    const num = (f, v, ph = "") => `<input class="fld tabular-nums" data-f="${f}" inputmode="numeric" value="${v ?? ""}" placeholder="${ph}" />`;
+    const area = (f, v, rows, ph = "") => `<textarea class="fld" data-f="${f}" rows="${rows}" placeholder="${escapeHtml(ph)}">${escapeHtml(v ?? "")}</textarea>`;
+    const sel = (f, v, options, labels, blank = "—") => `<select class="fld" data-f="${f}"><option value="">${blank}</option>${options.map(o => `<option value="${o}" ${o === v ? "selected" : ""}>${labels[o] || o}</option>`).join("")}</select>`;
+    const chips = (f, vals, options, labels) => `<div class="flex flex-wrap gap-1.5" data-multi="${f}">${options.map(o => `<button type="button" data-v="${o}" class="px-2.5 py-1 rounded-full border text-xs ${(vals || []).includes(o) ? "bg-neutral-900 text-white border-neutral-900" : "bg-white border-neutral-300 hover:bg-neutral-100"}">${labels[o]}</button>`).join("")}</div>`;
+
+    // Wires every [data-f] input and [data-multi] chip group under `root` to `save(field, value)`.
+    function wireFields(root, getObj, save, rerender) {
+      root.querySelectorAll("[data-f]").forEach(el => {
+        el.addEventListener("change", async () => {
+          try { await save(el.dataset.f, el.value); } catch { el.value = getObj()[el.dataset.f] ?? ""; }
+          if (el.tagName === "SELECT") rerender();
+        });
+      });
+      root.querySelectorAll("[data-multi]").forEach(wrap => {
+        wrap.addEventListener("click", async e => {
+          const b = e.target.closest("button"); if (!b) return;
+          const f = wrap.dataset.multi;
+          const cur = new Set(getObj()[f] || []);
+          cur.has(b.dataset.v) ? cur.delete(b.dataset.v) : cur.add(b.dataset.v);
+          await save(f, [...cur]);
+          rerender();
+        });
+      });
+    }
+
+    function personChips(list, role) {
+      return list.map(p => `
+        <span class="inline-flex items-center gap-1 pl-2.5 pr-1 py-0.5 rounded-full bg-neutral-100 text-sm">
+          <a href="/#contact=${p.id}" class="hover:underline">${escapeHtml(p.name)}</a>
+          <button type="button" data-rm-role="${role}" data-rm="${p.id}" class="text-neutral-400 hover:text-rose-600 px-1" title="Remove">&times;</button>
+        </span>`).join("");
+    }
+
+    async function renderDeal(id) {
+      $("header-actions").innerHTML = "";
+      try { deal = await api(`/api/deals/${id}`); } catch { app.innerHTML = `<div class="text-neutral-500 text-sm">Deal not found. <a href="#/" class="text-teal-700">Back</a></div>`; return; }
+      drawDeal();
+    }
+
+    function drawDeal() {
+      const d = deal;
+      const isC = d.conviction === "C";
+      app.innerHTML = `
+        <div class="mb-4">
+          <a href="#/" class="text-xs text-neutral-500 hover:text-neutral-800">← All deals</a>
+          <div class="flex items-start justify-between gap-3 mt-1 flex-wrap">
+            <div class="min-w-0">
+              <h1 class="text-2xl font-semibold tracking-tight break-words">${escapeHtml(dealTitle(d))}</h1>
+              ${d.one_liner ? `<p class="text-sm text-neutral-500 mt-0.5">${escapeHtml(d.one_liner)}</p>` : ""}
+            </div>
+            <button id="share-btn" class="shrink-0 px-3 py-2 text-sm rounded-lg ${isC ? "border border-rose-200 bg-rose-50 text-rose-700" : "bg-neutral-900 text-white hover:bg-neutral-800"}">Share with…</button>
+          </div>
+        </div>
+
+        <div class="grid md:grid-cols-3 gap-4">
+          <section class="md:col-span-2 bg-white rounded-xl border border-neutral-200 p-4 sm:p-5 space-y-4">
+            <div class="grid grid-cols-2 gap-3">
+              ${field("Company", txt("company_name", d.company_name, "Unnamed yet"))}
+              ${field("Status", sel("status", d.status, OPTS.statuses, STATUS_LABEL))}
+            </div>
+            ${field("Founders", `<div class="flex flex-wrap gap-1.5 mb-1.5">${personChips(d.founders, "founder") || `<span class="text-xs text-neutral-400">None linked</span>`}</div><div id="founder-picker"></div>`)}
+            ${field("Asks", chips("asks", d.asks, OPTS.asks, ASK_LABEL))}
+            ${field("Conviction", chips("conviction_one", [d.conviction || "unrated"], OPTS.convictions, { A: "A · stake my name", B: "B · right people", C: "C · don't share", unrated: "Unrated" }))}
+            ${field("One-liner", txt("one_liner", d.one_liner))}
+            ${field("Forwardable blurb", area("forwardable_blurb", d.forwardable_blurb, 6, "Paste the founder's forwardable email as-is"), "· what gets sent")}
+            ${field("Deck", txt("deck_url", d.deck_url, "https://…"))}
+            ${field("My take", area("my_take", d.my_take, 2, "Why I like it"))}
+            ${field("Notes", area("notes", d.notes, 3), "· private, never included in anything sent")}
+          </section>
+
+          <aside class="space-y-4">
+            <section class="bg-white rounded-xl border border-neutral-200 p-4 space-y-3">
+              <h3 class="text-xs font-semibold uppercase tracking-wide text-neutral-400">Round</h3>
+              ${field("Stage", sel("stage", d.stage, OPTS.stages, STAGE_LABEL))}
+              ${field("Round size", num("round_size", d.round_size, "e.g. 2000000"), d.round_size ? "· " + money(d.round_size) : "")}
+              ${field("Terms", area("round_terms", d.round_terms, 2, "SAFE/priced, cap, lead, committed so far"))}
+              ${field("Sectors", txt("sectors", (d.sectors || []).join(", "), "comma-separated"))}
+            </section>
+            <section class="bg-white rounded-xl border border-neutral-200 p-4 space-y-3">
+              <h3 class="text-xs font-semibold uppercase tracking-wide text-neutral-400">My investment</h3>
+              <div class="grid grid-cols-2 gap-3">
+                ${field("My check", num("my_check", d.my_check, "10000"), d.my_check ? "· " + money(d.my_check) : "")}
+                ${field("Invested on", `<input type="date" class="fld" data-f="invested_on" value="${d.invested_on || ""}" />`)}
+              </div>
+            </section>
+            <section class="bg-white rounded-xl border border-neutral-200 p-4 space-y-2">
+              <h3 class="text-xs font-semibold uppercase tracking-wide text-neutral-400">Shared with <span class="normal-case font-normal">· who has seen this</span></h3>
+              <div class="flex flex-wrap gap-1.5">${personChips(d.shared_with, "shared") || `<span class="text-xs text-neutral-400">Nobody yet</span>`}</div>
+              <div id="shared-picker"></div>
+            </section>
+            <div class="text-[11px] text-neutral-400 px-1 flex justify-between">
+              <span>Updated ${ago(d.updated_at)}</span>
+              <button id="delete-deal" class="hover:text-rose-600">Delete deal</button>
+            </div>
+          </aside>
+        </div>`;
+
+      wireFields(app, () => ({ ...deal, conviction_one: [deal.conviction || "unrated"] }), async (f, v) => {
+        if (f === "conviction_one") {
+          // Single-select rendered as chips: the clicked value is whichever one is new.
+          const picked = v.find(x => x !== (deal.conviction || "unrated")) || "unrated";
+          return saveDeal("conviction", picked);
+        }
+        await saveDeal(f, v);
+        // The title and the $ hints are derived from these, so redraw once saved.
+        if (["company_name", "one_liner", "round_size", "my_check"].includes(f)) drawDeal();
+      }, drawDeal);
+
+      app.querySelectorAll("[data-rm]").forEach(b => b.onclick = async () => {
+        await api(`/api/deals/${deal.id}/people/${b.dataset.rmRole}/${b.dataset.rm}`, { method: "DELETE" });
+        deal = await api(`/api/deals/${deal.id}`); drawDeal();
+      });
+      contactPicker($("founder-picker"), {
+        placeholder: "+ Add founder",
+        onPick: async c => { await api(`/api/deals/${deal.id}/people/founder`, { method: "POST", body: { contact_id: c.id } }); deal = await api(`/api/deals/${deal.id}`); drawDeal(); },
+        exclude: () => deal.founders.map(f => f.id),
+      });
+      contactPicker($("shared-picker"), {
+        placeholder: "+ Add someone manually",
+        createLabel: "Investor",
+        onPick: async c => { await api(`/api/deals/${deal.id}/people/shared`, { method: "POST", body: { contact_id: c.id } }); deal = await api(`/api/deals/${deal.id}`); drawDeal(); },
+        exclude: () => deal.shared_with.map(f => f.id),
+      });
+      $("share-btn").onclick = openShare;
+      $("delete-deal").onclick = async () => {
+        if (!confirm(`Delete “${dealTitle(deal)}”? This can't be undone.`)) return;
+        await api(`/api/deals/${deal.id}`, { method: "DELETE" });
+        location.hash = "#/";
+      };
+    }
+
+    // ---------- Share with… ----------
+    function emailBody(d) {
+      const main = d.forwardable_blurb || d.one_liner || "";
+      return ["If interested", "", main, d.deck_url ? `\n${d.deck_url}` : ""].join("\n").trim();
+    }
+    function smsBody(d) {
+      const lead = d.one_liner ? `${dealTitle(d)}: ${d.one_liner}` : dealTitle(d);
+      return [lead, d.deck_url || "", "", "Want an intro?"].filter((x, i) => x || i === 2).join("\n");
+    }
+    async function copyText(t) {
+      try { await navigator.clipboard.writeText(t); return true; }
+      catch {
+        const ta = document.createElement("textarea");
+        ta.value = t; document.body.appendChild(ta); ta.select();
+        const ok = document.execCommand("copy"); ta.remove(); return ok;
+      }
+    }
+
+    async function openShare() {
+      let showAll = false;
+      const selected = new Set();
+      openModal(modalHeader(`Share ${escapeHtml(dealTitle(deal))} with…`) + `<div id="share-body" class="flex-1 overflow-y-auto"></div>`);
+      async function draw() {
+        const data = await api(`/api/deals/${deal.id}/suggestions${showAll ? "?all=1" : ""}`);
+        const body = $("share-body");
+        if (!body) return;
+        if (data.blocked) {
+          body.innerHTML = `
+            <div class="p-5">
+              <div class="p-4 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-sm">
+                <strong>This is a C deal.</strong> You marked it “don't share”, so there are no suggestions.
+                Change the conviction on the deal if that's changed.
+              </div>
+            </div>`;
+          return;
+        }
+        const warn = [];
+        if (data.unrated) warn.push("Deal is unrated, so it's treated as a B: people who only want your best deals are left out.");
+        if (!deal.forwardable_blurb) warn.push("No forwardable blurb yet. Emails will use the one-liner instead.");
+        if (!deal.deck_url) warn.push("No deck link.");
+        const hidden = [];
+        if (data.hidden_by_bar) hidden.push(`${data.hidden_by_bar} above their share bar`);
+        if (data.hidden_by_fit && !showAll) hidden.push(`${data.hidden_by_fit} don't fit the ask or stage`);
+        body.innerHTML = `
+          ${warn.length ? `<div class="mx-5 mt-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-xs space-y-1">${warn.map(w => `<div>${w}</div>`).join("")}</div>` : ""}
+          <div class="px-5 pt-3 pb-2 flex items-center justify-between text-xs text-neutral-500">
+            <span>${hidden.length ? "Hidden: " + hidden.join(", ") : `${data.investors.length} investors`}</span>
+            <label class="flex items-center gap-1.5 cursor-pointer"><input type="checkbox" id="show-all" ${showAll ? "checked" : ""} class="rounded border-neutral-300" /> Show all investors</label>
+          </div>
+          ${data.investors.length ? "" : `<div class="px-5 py-8 text-center text-sm text-neutral-400">No investors to suggest. <a href="#/investors" onclick="closeModal()" class="text-teal-700">Add investor profiles</a>.</div>`}
+          <ul class="divide-y divide-neutral-100 border-t border-neutral-100">
+            ${data.investors.map(inv => {
+              const on = selected.has(inv.contact_id);
+              return `
+              <li class="${inv.seen && !on ? "opacity-50" : ""} ${on ? "bg-neutral-50" : ""}">
+                <button type="button" data-pick="${inv.contact_id}" class="w-full text-left px-5 py-3 flex items-start gap-3">
+                  <span class="mt-0.5 w-4 h-4 shrink-0 rounded border ${on ? "bg-neutral-900 border-neutral-900" : "border-neutral-300"} flex items-center justify-center text-white text-[10px]">${on ? "✓" : ""}</span>
+                  <span class="min-w-0 flex-1">
+                    <span class="font-medium text-sm">${escapeHtml(inv.name)}</span>
+                    ${inv.firm ? `<span class="text-xs text-neutral-500"> · ${escapeHtml(inv.firm)}</span>` : ""}
+                    ${inv.seen ? `<span class="ml-1 text-[10px] uppercase tracking-wide text-neutral-500 bg-neutral-200 rounded px-1">seen</span>` : ""}
+                    ${!inv.fit ? `<span class="ml-1 text-[10px] uppercase tracking-wide text-neutral-500 border border-neutral-300 rounded px-1">weak fit</span>` : ""}
+                    <span class="block text-xs text-neutral-500 mt-0.5">${escapeHtml(inv.reasons.join(" · ") || (inv.investor_types || []).map(t => TYPE_LABEL[t]).join(" + ") || "No profile details yet")}</span>
+                    ${inv.flags.length ? `<span class="block text-xs text-amber-700 mt-0.5">⚠ ${escapeHtml(inv.flags.join(" · "))}</span>` : ""}
+                  </span>
+                </button>
+                ${on ? `
+                <div class="px-5 pb-3 pl-12 flex flex-wrap gap-2 text-xs">
+                  <button type="button" data-act="copy" data-cid="${inv.contact_id}" class="px-2.5 py-1.5 rounded-lg border border-neutral-300 bg-white hover:bg-neutral-100">Copy for email</button>
+                  <a data-act="mail" data-cid="${inv.contact_id}" href="mailto:${encodeURIComponent(inv.email || "")}?subject=${encodeURIComponent(dealTitle(deal))}&body=${encodeURIComponent(emailBody(deal))}" class="px-2.5 py-1.5 rounded-lg border border-neutral-300 bg-white hover:bg-neutral-100">Open in Mail${inv.email ? "" : ` <span class="text-neutral-400">(no email)</span>`}</a>
+                  ${inv.phone ? `<a data-act="sms" data-cid="${inv.contact_id}" href="sms:${encodeURIComponent(inv.phone)}?&body=${encodeURIComponent(smsBody(deal))}" class="px-2.5 py-1.5 rounded-lg border border-neutral-300 bg-white hover:bg-neutral-100">Open in Messages</a>` : `<span class="px-2.5 py-1.5 text-neutral-400">No phone</span>`}
+                </div>` : ""}
+              </li>`;
+            }).join("")}
+          </ul>`;
+        $("show-all").onchange = e => { showAll = e.target.checked; draw(); };
+        body.querySelectorAll("[data-pick]").forEach(b => b.onclick = () => {
+          const id = +b.dataset.pick;
+          selected.has(id) ? selected.delete(id) : selected.add(id);
+          draw();
+        });
+        body.querySelectorAll("[data-act]").forEach(el => el.addEventListener("click", async () => {
+          const cid = +el.dataset.cid;
+          if (el.dataset.act === "copy") {
+            toast(await copyText(emailBody(deal)) ? "Copied" : "Copy failed");
+          }
+          // Any of the three counts as "shown to them". Mail/Messages links still open normally.
+          if (!deal.shared_with.some(p => p.id === cid)) {
+            await api(`/api/deals/${deal.id}/people/shared`, { method: "POST", body: { contact_id: cid } });
+            deal = await api(`/api/deals/${deal.id}`);
+          }
+        }));
+      }
+      // Redraw the deal page underneath on close so "Shared with" is current.
+      const obs = new MutationObserver(() => { if ($("modal").classList.contains("hidden")) { obs.disconnect(); drawDeal(); } });
+      obs.observe($("modal"), { attributes: true, attributeFilter: ["class"] });
+      draw();
+    }
+
+    // ---------- Investors ----------
+    async function renderInvestors() {
+      $("header-actions").innerHTML = `<button id="add-inv" class="px-3 py-1.5 text-sm rounded-lg bg-neutral-900 text-white hover:bg-neutral-800">+ Add investor</button>`;
+      $("add-inv").onclick = () => {
+        openModal(modalHeader("Add investor profile") + `<div class="p-5"><p class="text-xs text-neutral-500 mb-2">Pick the person from your contacts (or create them).</p><div id="inv-picker"></div></div>`);
+        contactPicker($("inv-picker"), {
+          createLabel: "Investor",
+          onPick: async c => { await api(`/api/investors/${c.id}`, { method: "PUT", body: {} }); closeModal(); location.hash = `#/investor/${c.id}`; },
+          exclude: () => investors.map(i => i.contact_id),
+        }).focus();
+      };
+      investors = await api("/api/investors");
+      drawInvestors();
+    }
+
+    function drawInvestors() {
+      const sectors = [...new Set(investors.flatMap(i => i.sectors || []))].sort((a, b) => a.localeCompare(b));
+      const pills = (key, label, options, labels) => `
+        <div class="flex flex-wrap items-center gap-1.5">
+          <span class="text-neutral-500 w-20 shrink-0">${label}</span>
+          ${[["all", "All"], ...options.map(o => [o, labels[o] || o])].map(([v, l]) => `<button data-k="${key}" data-v="${escapeHtml(v)}" class="ip px-2.5 py-1 rounded-full border ${invFilter[key] === v ? "bg-neutral-900 text-white border-neutral-900" : "bg-white border-neutral-300 hover:bg-neutral-100"}">${escapeHtml(l)}</button>`).join("")}
+        </div>`;
+      const check = parseInt(String(invFilter.check).replace(/[^\d]/g, ""), 10);
+      const rows = investors.filter(i =>
+        (invFilter.type === "all" || (i.investor_types || []).includes(invFilter.type)) &&
+        (invFilter.closeness === "all" || i.closeness === invFilter.closeness) &&
+        (invFilter.active === "all" || i.active === invFilter.active) &&
+        (invFilter.stage === "all" || (i.stages || []).includes(invFilter.stage)) &&
+        (invFilter.sector === "all" || (i.sectors || []).some(s => s.toLowerCase() === invFilter.sector.toLowerCase())) &&
+        // Check size: hide only people whose known range excludes it.
+        (!check || ((i.check_min == null || i.check_min <= check) && (i.check_max == null || i.check_max >= check)))
+      );
+      app.innerHTML = `
+        <div class="space-y-1.5 mb-3 text-xs">
+          ${pills("type", "Type", OPTS.investor_types, TYPE_LABEL)}
+          ${pills("closeness", "Closeness", OPTS.closeness, CLOSE_LABEL)}
+          ${pills("active", "Active", OPTS.activity, ACTIVE_LABEL)}
+          ${pills("stage", "Stage", OPTS.stages, STAGE_LABEL)}
+          ${sectors.length ? pills("sector", "Sector", sectors, {}) : ""}
+          <div class="flex items-center gap-1.5">
+            <span class="text-neutral-500 w-20 shrink-0">Check size</span>
+            <input id="check-filter" inputmode="numeric" value="${escapeHtml(invFilter.check)}" placeholder="e.g. 25000" class="fld !w-32 !py-1 !text-xs" />
+            <span class="text-neutral-400">fits their range (unknown ranges kept)</span>
+          </div>
+        </div>
+        <div class="bg-white rounded-xl border border-neutral-200 overflow-hidden">
+          ${rows.length ? `
+          <table class="w-full text-sm">
+            <thead class="text-[11px] uppercase tracking-wide text-neutral-400 border-b border-neutral-100">
+              <tr>
+                <th class="text-left font-medium px-3 py-2">Name</th>
+                <th class="text-left font-medium px-3 py-2">Type</th>
+                <th class="text-left font-medium px-3 py-2 hidden sm:table-cell">Closeness</th>
+                <th class="text-left font-medium px-3 py-2 hidden sm:table-cell">Check</th>
+                <th class="text-left font-medium px-3 py-2 hidden md:table-cell">Sectors</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-neutral-100">
+              ${rows.map(i => `
+                <tr class="hover:bg-neutral-50 cursor-pointer" onclick="location.hash='#/investor/${i.contact_id}'">
+                  <td class="px-3 py-2.5">
+                    <div class="font-medium">${escapeHtml(i.name)}</div>
+                    <div class="text-xs text-neutral-500">${escapeHtml(i.firm || "")}<span class="sm:hidden">${i.firm && i.closeness ? " · " : ""}${CLOSE_LABEL[i.closeness] || ""}</span></div>
+                  </td>
+                  <td class="px-3 py-2.5 text-xs">${(i.investor_types || []).map(t => TYPE_LABEL[t]).join(" + ") || `<span class="text-neutral-300">—</span>`}</td>
+                  <td class="px-3 py-2.5 text-xs hidden sm:table-cell">${CLOSE_LABEL[i.closeness] || `<span class="text-neutral-300">—</span>`}</td>
+                  <td class="px-3 py-2.5 text-xs hidden sm:table-cell tabular-nums">${i.check_min || i.check_max ? `${money(i.check_min) || "?"}–${money(i.check_max) || "?"}` : `<span class="text-neutral-300">—</span>`}</td>
+                  <td class="px-3 py-2.5 text-xs hidden md:table-cell text-neutral-600">${escapeHtml((i.sectors || []).join(", "))}</td>
+                </tr>`).join("")}
+            </tbody>
+          </table>` : `<div class="p-8 text-center text-sm text-neutral-400">${investors.length ? "No investors match these filters." : "No investor profiles yet."}</div>`}
+        </div>
+        <p class="text-xs text-neutral-400 mt-2">${rows.length} of ${investors.length}</p>`;
+      app.querySelectorAll(".ip").forEach(b => b.onclick = () => { invFilter[b.dataset.k] = b.dataset.v; drawInvestors(); });
+      $("check-filter").onchange = e => { invFilter.check = e.target.value; drawInvestors(); };
+    }
+
+    // ---------- Investor profile ----------
+    let inv = null;
+
+    async function renderInvestor(cid) {
+      $("header-actions").innerHTML = "";
+      try { inv = await api(`/api/investors/${cid}`); } catch { app.innerHTML = `<div class="text-neutral-500 text-sm">Contact not found.</div>`; return; }
+      drawInvestor();
+    }
+
+    function drawInvestor() {
+      const { contact: c, profile: p, deals_seen, deals_founded } = inv;
+      if (!p) {
+        app.innerHTML = `
+          <a href="#/investors" class="text-xs text-neutral-500 hover:text-neutral-800">← Investors</a>
+          <h1 class="text-2xl font-semibold tracking-tight mt-1 mb-4">${escapeHtml(c.name)}</h1>
+          <div class="bg-white rounded-xl border border-neutral-200 p-6 text-sm text-neutral-600">
+            No investor profile. <button id="create-prof" class="text-teal-700 hover:underline">Add investor profile</button>
+          </div>`;
+        $("create-prof").onclick = async () => { await api(`/api/investors/${c.id}`, { method: "PUT", body: {} }); renderInvestor(c.id); };
+        return;
+      }
+      const save = async (f, v) => {
+        if (f === "email") {
+          await api(`/api/contacts/${c.id}`, { method: "PUT", body: { email: v.trim() || null } });
+          inv.contact.email = v.trim() || null;
+        } else {
+          inv.profile = await api(`/api/investors/${c.id}`, { method: "PUT", body: { [f]: v } });
+        }
+        toast("Saved");
+      };
+      app.innerHTML = `
+        <a href="#/investors" class="text-xs text-neutral-500 hover:text-neutral-800">← Investors</a>
+        <div class="flex items-baseline justify-between gap-3 mt-1 mb-4 flex-wrap">
+          <h1 class="text-2xl font-semibold tracking-tight">${escapeHtml(c.name)}</h1>
+          <a href="/#contact=${c.id}" class="text-xs text-teal-700 hover:underline">Contact →</a>
+        </div>
+        <div class="grid md:grid-cols-3 gap-4">
+          <section class="md:col-span-2 bg-white rounded-xl border border-neutral-200 p-4 sm:p-5 space-y-4">
+            ${field("Type", chips("investor_types", p.investor_types, OPTS.investor_types, TYPE_LABEL))}
+            <div class="grid grid-cols-2 gap-3">
+              ${field("Firm", txt("firm", p.firm))}
+              ${field("Email", `<input class="fld" data-f="email" type="email" value="${escapeHtml(c.email || "")}" placeholder="for Open in Mail" />`)}
+              ${field("Closeness", sel("closeness", p.closeness, OPTS.closeness, CLOSE_LABEL))}
+              ${field("Share bar", sel("share_bar", p.share_bar, OPTS.share_bars, BAR_LABEL, "Good or better (default)"))}
+              ${field("Active", sel("active", p.active, OPTS.activity, ACTIVE_LABEL))}
+              <div class="grid grid-cols-2 gap-2">
+                ${field("Check min", num("check_min", p.check_min))}
+                ${field("Check max", num("check_max", p.check_max))}
+              </div>
+            </div>
+            ${field("Stages", chips("stages", p.stages, OPTS.stages, STAGE_LABEL))}
+            ${field("Sectors", txt("sectors", (p.sectors || []).join(", "), "comma-separated"))}
+            ${field("Knows well", txt("knows_well", p.knows_well, "e.g. knows the climate founder scene well"))}
+            ${field("Notes", area("investor_notes", p.investor_notes, 3))}
+          </section>
+          <aside class="space-y-4">
+            <section class="bg-white rounded-xl border border-neutral-200 p-4">
+              <h3 class="text-xs font-semibold uppercase tracking-wide text-neutral-400 mb-2">Deals they've seen</h3>
+              ${deals_seen.length ? `<ul class="space-y-1.5 text-sm">${deals_seen.map(d => `
+                <li class="flex items-center justify-between gap-2"><a href="#/deal/${d.id}" class="hover:underline truncate">${escapeHtml(d.company_name || (d.founder_names ? `${d.founder_names}'s co` : "Untitled deal"))}</a>${statusPill(d.status)}</li>`).join("")}</ul>`
+                : `<p class="text-xs text-neutral-400">None yet</p>`}
+            </section>
+            ${deals_founded.length ? `
+            <section class="bg-white rounded-xl border border-neutral-200 p-4">
+              <h3 class="text-xs font-semibold uppercase tracking-wide text-neutral-400 mb-2">Founder of</h3>
+              <ul class="space-y-1.5 text-sm">${deals_founded.map(d => `<li><a href="#/deal/${d.id}" class="hover:underline">${escapeHtml(d.company_name || "Untitled deal")}</a></li>`).join("")}</ul>
+            </section>` : ""}
+            <div class="text-[11px] text-neutral-400 px-1 text-right"><button id="rm-prof" class="hover:text-rose-600">Remove investor profile</button></div>
+          </aside>
+        </div>`;
+      wireFields(app, () => inv.profile, save, drawInvestor);
+      $("rm-prof").onclick = async () => {
+        if (!confirm(`Remove ${c.name}'s investor profile? The contact itself stays.`)) return;
+        await api(`/api/investors/${c.id}`, { method: "DELETE" });
+        location.hash = "#/investors";
+      };
+    }
+
+    // ---------- router ----------
+    async function route() {
+      closeModal();
+      if (!OPTS) OPTS = await api("/api/deal-options");
+      const h = location.hash || "#/";
+      const tab = h.startsWith("#/investor") ? "investors" : "deals";
+      document.querySelectorAll(".tab").forEach(t => {
+        t.className = `tab px-3 py-1.5 rounded-lg font-medium ${t.dataset.tab === tab ? "bg-neutral-900 text-white" : "text-neutral-600 hover:bg-neutral-200"}`;
+      });
+      let m;
+      if ((m = h.match(/^#\/deal\/(\d+)/))) return renderDeal(+m[1]);
+      if ((m = h.match(/^#\/investor\/(\d+)/))) return renderInvestor(+m[1]);
+      if (h.startsWith("#/investors")) return renderInvestors();
+      if (h.startsWith("#/new")) { await renderDeals(); return openAddDeal(); }
+      return renderDeals();
+    }
+    window.addEventListener("hashchange", route);
+    route();
+  </script>
+</body>
+</html>

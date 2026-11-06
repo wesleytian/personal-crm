@@ -10,20 +10,22 @@
   </style>
 </head>
 <body class="bg-neutral-50 text-neutral-900 min-h-screen">
-  <div class="max-w-5xl mx-auto px-6 py-10">
+  <div class="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
     <!-- Header -->
-    <header class="flex items-center justify-between mb-8">
+    <header class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-8">
       <div>
         <h1 class="text-3xl font-semibold tracking-tight">Contacts</h1>
         <p id="summary" class="text-sm text-neutral-500 mt-1">Loading…</p>
         <div class="flex items-center gap-3 mt-1 text-xs">
+          <a href="/portfolio" class="text-teal-700 hover:underline font-medium">Private investments</a>
+          <span class="text-neutral-300">·</span>
           <a href="/calendar" class="text-teal-700 hover:underline">→ Activity calendar</a>
           <span class="text-neutral-300">·</span>
           <button id="refresh-btn" class="text-neutral-500 hover:text-neutral-900" title="Re-pull latest from Messages">↻ Refresh</button>
           <span id="updated-stamp" class="text-neutral-400"></span>
         </div>
       </div>
-      <div class="flex flex-wrap gap-2 justify-end">
+      <div class="flex flex-wrap gap-2 sm:justify-end">
         <button id="cleanup-btn" title="Delete unnamed contacts that are obvious automated senders (shortcodes or one-way notification streams you've never replied to). Keeps borderline cases." class="px-3 py-2 text-sm rounded-lg border border-neutral-300 bg-white hover:bg-neutral-100 transition">
           Clean up unnamed
         </button>
@@ -43,23 +45,6 @@
     <div id="health-warn" class="hidden mb-6 p-4 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-sm">
       <strong>Messages not accessible.</strong> Grant your terminal Full Disk Access in
       System Settings → Privacy & Security → Full Disk Access, then restart the server.
-    </div>
-
-    <!-- AI insights -->
-    <div id="ai-insights" class="hidden mb-4 rounded-xl bg-gradient-to-br from-violet-50 to-rose-50 border border-violet-200 overflow-hidden">
-      <button id="ai-toggle" class="w-full flex items-center justify-between px-4 py-3 hover:bg-white/30 transition text-left">
-        <div class="flex items-center gap-2">
-          <span class="text-sm font-semibold text-violet-900">AI insights</span>
-          <span id="ai-age" class="text-[11px] text-violet-500"></span>
-        </div>
-        <div class="flex items-center gap-3 text-[11px]">
-          <span id="ai-refresh" class="text-violet-700 hover:underline">↻ regenerate</span>
-          <span id="ai-chevron" class="text-violet-400 text-sm transition-transform">▾</span>
-        </div>
-      </button>
-      <div id="ai-body" class="px-4 pb-4 pt-1">
-        <ul id="ai-insights-list" class="text-sm text-neutral-700 space-y-1.5"></ul>
-      </div>
     </div>
 
     <!-- Network at a glance -->
@@ -87,10 +72,10 @@
 
 
     <!-- Search + sort -->
-    <div class="flex gap-2 mb-3">
+    <div class="flex flex-col sm:flex-row gap-2 mb-3">
       <input id="search" type="text" placeholder="Search contacts…"
         class="flex-1 px-4 py-2.5 rounded-lg border border-neutral-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400" />
-      <select id="sort-by" class="px-3 py-2.5 rounded-lg border border-neutral-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400" title="Sort order">
+      <select id="sort-by" class="min-w-0 px-3 py-2.5 rounded-lg border border-neutral-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400" title="Sort order">
         <option value="last">Sort: Last contact</option>
         <option value="volume">Sort: Most messages (last year)</option>
         <option value="interaction">Sort: Total time (msgs + call minutes)</option>
@@ -395,11 +380,7 @@
       return palette[h % palette.length];
     };
 
-    // Auto-seed: example: hide certain contacts from AI commentary.
-    if (!localStorage.getItem("crm.ignored_in_ai_seeded")) {
-      localStorage.setItem("crm.ignored_in_ai", JSON.stringify([75, 205]));
-      localStorage.setItem("crm.ignored_in_ai_seeded", "1");
-    }
+    // Contacts hidden from AI insights (ids, per browser). Toggled from the contact modal.
     function getIgnoredAiIds() {
       try { return JSON.parse(localStorage.getItem("crm.ignored_in_ai") || "[]"); } catch { return []; }
     }
@@ -700,11 +681,11 @@
             <div class="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-medium ${colorFor(String(c.id))} shrink-0">
               ${initials(c.name || "?")}
             </div>
-            <div class="flex-1 min-w-0 flex items-center gap-2">
+            <div class="flex-1 min-w-0 flex flex-wrap sm:flex-nowrap items-center gap-x-2 gap-y-0.5">
               <span class="name-edit text-sm truncate shrink-0 max-w-[40%] cursor-text ${c.unnamed ? 'text-amber-700' : ''}" data-id="${c.id}" data-name="${escapeHtml(c.name || "")}" title="Click to rename — saves to CRM and Apple Contacts. Esc to cancel.">${c.unnamed ? '? ' : ''}${escapeHtml(c.name || "")}</span>
               ${occupationSelectHTML(c)}
               ${locationSelectHTML(c)}
-              <div class="text-xs text-neutral-400 truncate italic flex-1">${escapeHtml(preview)}</div>
+              <div class="hidden sm:block text-xs text-neutral-400 truncate italic flex-1">${escapeHtml(preview)}</div>
             </div>
           </div>
           ${rightStat(c, sortBy, lastCls, overdueDot, cadenceTxt, firstTxt)}
@@ -1348,6 +1329,7 @@
       loadThread(c);
     }
 
+
     function closeModal() {
       $("modal").classList.add("hidden");
       $("thread-section").classList.add("hidden");
@@ -1648,7 +1630,13 @@
     bindCollapse("ai-toggle", "ai-body", "ai-chevron", "crm.ai-collapsed");
     bindCollapse("insights-toggle", "insights-body", "insights-chevron", "crm.insights-collapsed");
 
-    loadAndStamp();
+    // Deep link from the Deals page: /#contact=<id> opens that contact.
+    function openFromHash() {
+      const m = location.hash.match(/^#contact=(\d+)/);
+      if (m) { history.replaceState(null, "", "/"); openEdit(+m[1]); }
+    }
+    window.addEventListener("hashchange", openFromHash);
+    loadAndStamp().then(openFromHash);
     loadAiInsights();
   </script>
 </body>
