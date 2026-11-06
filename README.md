@@ -13,6 +13,22 @@ A local Flask app (macOS) for keeping up with people and tracking private invest
 All data lives in a local SQLite file (`crm.db`), which is gitignored along with backups,
 price caches, CSV exports and `.env`.
 
+## Screenshots
+
+All taken from the fake demo dataset (see [Demo with fake data](#demo-with-fake-data)).
+
+Contacts, sorted by last contact, with tier, chemistry and cadence badges:
+![Contacts list](docs/screenshots/contacts.png)
+
+A contact, with recent messages pulled from Messages:
+![Contact detail](docs/screenshots/contact-detail.png)
+
+Deals you're advising, watching, evaluating or committed to:
+![Deals](docs/screenshots/deals.png)
+
+Private investments: totals, yearly pacing and a public-market comparison:
+![Private investments](docs/screenshots/portfolio.png)
+
 ## Setup
 
 ```sh
