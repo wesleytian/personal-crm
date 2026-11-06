@@ -1609,7 +1609,6 @@
       loadAndStamp(true);
     }, 60 * 60 * 1000);  // every hour
     $("refresh-btn").addEventListener("click", () => loadAndStamp(true));
-    $("ai-refresh").addEventListener("click", (e) => { e.stopPropagation(); loadAiInsights(true); });
 
     function bindCollapse(toggleId, bodyId, chevronId, storageKey) {
       const collapsed = localStorage.getItem(storageKey) === "1";
@@ -1627,7 +1626,6 @@
         localStorage.setItem(storageKey, next ? "1" : "0");
       });
     }
-    bindCollapse("ai-toggle", "ai-body", "ai-chevron", "crm.ai-collapsed");
     bindCollapse("insights-toggle", "insights-body", "insights-chevron", "crm.insights-collapsed");
 
     // Deep link from the Deals page: /#contact=<id> opens that contact.
@@ -1637,7 +1635,6 @@
     }
     window.addEventListener("hashchange", openFromHash);
     loadAndStamp().then(openFromHash);
-    loadAiInsights();
   </script>
 </body>
 </html>
