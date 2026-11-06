@@ -14,9 +14,16 @@ from pathlib import Path
 from flask import Flask, jsonify, request, send_from_directory
 
 APP_DIR = Path(__file__).parent
-DB_PATH = APP_DIR / "crm.db"
-MESSAGES_DB = Path.home() / "Library" / "Messages" / "chat.db"
-CALLS_DB = Path.home() / "Library" / "Application Support" / "CallHistoryDB" / "CallHistory.storedata"
+# CRM_DEMO=1 runs against the fake data from seed_demo.py: demo.db plus fake Messages/call-history
+# DBs, and never touches the real macOS Contacts, Messages or call history.
+DEMO_MODE = os.environ.get("CRM_DEMO") == "1"
+DB_PATH = Path(os.environ.get("CRM_DB") or APP_DIR / ("demo.db" if DEMO_MODE else "crm.db"))
+if DEMO_MODE:
+    MESSAGES_DB = APP_DIR / "demo_messages.db"
+    CALLS_DB = APP_DIR / "demo_calls.db"
+else:
+    MESSAGES_DB = Path.home() / "Library" / "Messages" / "chat.db"
+    CALLS_DB = Path.home() / "Library" / "Application Support" / "CallHistoryDB" / "CallHistory.storedata"
 APPLE_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
@@ -412,6 +419,8 @@ def get_recent_message_handles(limit: int | None = None, days: int | None = None
 
 def get_macos_contacts() -> list[dict]:
     """Read macOS Contacts directly from the AddressBook SQLite DB."""
+    if DEMO_MODE:
+        return []
     sources = list((Path.home() / "Library/Application Support/AddressBook/Sources").glob("*/AddressBook-v22.abcddb"))
     if not sources:
         top = Path.home() / "Library/Application Support/AddressBook/AddressBook-v22.abcddb"
@@ -1294,6 +1303,8 @@ def push_to_apple(cid: int):
     """Write the CRM's name into macOS Contacts for this person.
     Looks them up by phone/email and updates the contact's name.
     First call may trigger a macOS permission prompt for Contacts."""
+    if DEMO_MODE:
+        return jsonify({"ok": False, "error": "Apple Contacts is disabled in demo mode"}), 400
     with sqlite3.connect(DB_PATH) as conn:
         row = conn.execute("SELECT name, phone, email FROM contacts WHERE id=?", (cid,)).fetchone()
     if not row:
@@ -2426,12 +2437,12 @@ def backup_db() -> Path | None:
     """One consistent copy of crm.db per day in backups/ (gitignored), keeping the last 30.
     Uses SQLite's online backup so it's safe while the server is writing."""
     BACKUP_DIR.mkdir(exist_ok=True)
-    dest = BACKUP_DIR / f"crm-{datetime.now().strftime('%Y-%m-%d')}.db"
+    dest = BACKUP_DIR / f"{DB_PATH.stem}-{datetime.now().strftime('%Y-%m-%d')}.db"
     if dest.exists():
         return None
     with sqlite3.connect(DB_PATH) as src, sqlite3.connect(dest) as dst:
         src.backup(dst)
-    for old in sorted(BACKUP_DIR.glob("crm-*.db"))[:-BACKUP_KEEP]:
+    for old in sorted(BACKUP_DIR.glob(f"{DB_PATH.stem}-*.db"))[:-BACKUP_KEEP]:
         old.unlink()
     return dest
 
@@ -2486,6 +2497,7 @@ if __name__ == "__main__":
     init_db()
     init_portfolio_db()
     import threading
-    threading.Thread(target=_backup_loop, daemon=True).start()
+    if not DEMO_MODE:
+        threading.Thread(target=_backup_loop, daemon=True).start()
     threading.Thread(target=_warm_prices, daemon=True).start()
-    app.run(host="127.0.0.1", port=5555, debug=False)
+    app.run(host="127.0.0.1", port=int(os.environ.get("PORT", 5555)), debug=False)
