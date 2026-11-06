@@ -1,14 +1,27 @@
 # Secrets
 .env
+.env.*
 
-# Personal data - 448 real contacts with phone numbers and emails.
-# Deliberately untracked: keep PII out of git history.
-crm.db
-crm.db-wal
-crm.db-shm
+# Personal data: the real contacts/portfolio DB, its WAL/SHM sidecars, ad-hoc
+# .bak copies, daily backups, and any exported CSVs. Never commit these.
+*.db
+*.db-wal
+*.db-shm
+*.db.bak*
+*.sqlite
+*.sqlite3
+*.csv
+backups/
+
+# Private one-off scripts that reference real people (kept locally only)
+private/
+
+# Cached public-market prices
+price_cache.json
 
 # Virtualenv
 venv/
+.venv/
 
 # Python
 __pycache__/
