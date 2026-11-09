@@ -11,7 +11,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, redirect, request, send_from_directory
 
 APP_DIR = Path(__file__).parent
 # CRM_DEMO=1 runs against the fake data from seed_demo.py: demo.db plus fake Messages/call-history
@@ -560,6 +560,12 @@ def merge_stats(contact: dict, msg_stats: dict) -> dict:
         )
     )
     return contact
+
+
+@app.route("/portfolio")
+def portfolio_moved():
+    # The portfolio is its own app now (~/projects/portfolio); keep the old bookmark working.
+    return redirect("http://127.0.0.1:5557/", code=302)
 
 
 @app.route("/")
