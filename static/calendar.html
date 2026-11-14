@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Activity Calendar</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <meta name="color-scheme" content="light dark" />
+  <link rel="stylesheet" href="/static/dark.css" />
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif; }
     .day-cell { width: 38px; height: 38px; }
@@ -267,7 +269,7 @@
       for (let i = 0; i <= tickCount; i++) {
         const val = (max * i) / tickCount;
         const y = padTop + chartH - (val / max) * chartH;
-        yTicks.push(`<line x1="${padLeft}" y1="${y}" x2="${width - 4}" y2="${y}" stroke="#f3f4f6" stroke-width="1"/><text x="${padLeft - 4}" y="${y + 3}" text-anchor="end" font-size="9" fill="#a3a3a3">${val.toFixed(0)}</text>`);
+        yTicks.push(`<line class="chart-grid" x1="${padLeft}" y1="${y}" x2="${width - 4}" y2="${y}" stroke="#f3f4f6" stroke-width="1"/><text x="${padLeft - 4}" y="${y + 3}" text-anchor="end" font-size="9" fill="#a3a3a3">${val.toFixed(0)}</text>`);
       }
       const bars = entries.map((e, i) => {
         const h = (e.avg / max) * chartH;

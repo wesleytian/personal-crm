@@ -84,6 +84,9 @@ def init_db() -> None:
             conn.execute("ALTER TABLE contacts ADD COLUMN cadence_override_at TEXT")
         if "cadence_computed_at_override" not in cols:
             conn.execute("ALTER TABLE contacts ADD COLUMN cadence_computed_at_override TEXT")
+        if "notes_synced" not in cols:
+            # Last notes text known to match Apple Contacts — lets us tell which side changed.
+            conn.execute("ALTER TABLE contacts ADD COLUMN notes_synced TEXT")
         # Deals + investor network. List-valued fields are JSON arrays in TEXT, like occupations.
         conn.execute(
             """
@@ -1378,6 +1381,148 @@ def push_to_apple(cid: int):
         return jsonify(data)
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+def _addressbook_sources() -> list[Path]:
+    sources = list((Path.home() / "Library/Application Support/AddressBook/Sources").glob("*/AddressBook-v22.abcddb"))
+    if not sources:
+        top = Path.home() / "Library/Application Support/AddressBook/AddressBook-v22.abcddb"
+        if top.exists():
+            sources = [top]
+    return sources
+
+
+def find_apple_person(phone: str | None, email: str | None) -> dict | None:
+    """Find the Apple Contacts record matching this phone/email.
+    Returns {uid, name, note} (uid usable with JXA people.byId) or None."""
+    if DEMO_MODE:
+        return None
+    want_phone = normalize_handle(phone) if phone and "@" not in phone else None
+    want_email = normalize_handle(email) if email else None
+    if phone and "@" in phone:
+        want_email = want_email or normalize_handle(phone)
+    if not want_phone and not want_email:
+        return None
+    for db in _addressbook_sources():
+        tmp_dir = Path(tempfile.mkdtemp(prefix="crm_ab_"))
+        tmp_db = tmp_dir / "ab.db"
+        try:
+            shutil.copy2(db, tmp_db)
+            for ext in ("-wal", "-shm"):
+                src = Path(str(db) + ext)
+                if src.exists():
+                    shutil.copy2(src, str(tmp_db) + ext)
+            with sqlite3.connect(tmp_db) as conn:
+                owner = None
+                if want_phone:
+                    for o, num in conn.execute("SELECT ZOWNER, ZFULLNUMBER FROM ZABCDPHONENUMBER WHERE ZFULLNUMBER IS NOT NULL"):
+                        if normalize_handle(num) == want_phone:
+                            owner = o
+                            break
+                if owner is None and want_email:
+                    for o, addr in conn.execute("SELECT ZOWNER, ZADDRESS FROM ZABCDEMAILADDRESS WHERE ZADDRESS IS NOT NULL"):
+                        if (addr or "").strip().lower() == want_email:
+                            owner = o
+                            break
+                if owner is None:
+                    continue
+                rec = conn.execute(
+                    "SELECT ZUNIQUEID, ZFIRSTNAME, ZLASTNAME, ZORGANIZATION FROM ZABCDRECORD WHERE Z_PK=?", (owner,)
+                ).fetchone()
+                if not rec or not rec[0]:
+                    continue
+                note_row = conn.execute("SELECT ZTEXT FROM ZABCDNOTE WHERE ZCONTACT=?", (owner,)).fetchone()
+                name = " ".join(p for p in (rec[1], rec[2]) if p).strip() or rec[3] or ""
+                return {"uid": rec[0], "name": name, "note": (note_row[0] if note_row else None) or ""}
+        except Exception as e:
+            print(f"[contacts] note lookup error in {db}: {e}")
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+    return None
+
+
+def write_apple_note(uid: str, text: str) -> dict:
+    script = r"""
+    function run(argv) {
+      const Contacts = Application('Contacts');
+      const p = Contacts.people.byId(argv[0]);
+      p.note = argv[1];
+      Contacts.save();
+      return JSON.stringify({ ok: true });
+    }
+    """
+    try:
+        result = subprocess.run(
+            ["osascript", "-l", "JavaScript", "-e", script, uid, text],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            return {"ok": False, "error": result.stderr.strip() or "osascript failed"}
+        return json.loads(result.stdout.strip() or "{}")
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.route("/api/contacts/<int:cid>/notes/sync", methods=["POST"])
+def sync_notes(cid: int):
+    """Reconcile CRM notes with Apple Contacts notes (called when the modal opens).
+    Uses notes_synced (last agreed text) to decide which side changed:
+      - only Apple changed  -> pull Apple's note into the CRM
+      - only CRM changed    -> push CRM note to Apple
+      - both changed        -> keep CRM, report conflict with Apple's text"""
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute("SELECT phone, email, notes, notes_synced FROM contacts WHERE id=?", (cid,)).fetchone()
+    if not row:
+        return jsonify({"error": "not found"}), 404
+    phone, email, crm, synced = row
+    crm = crm or ""
+    person = find_apple_person(phone, email)
+    if not person:
+        return jsonify({"ok": True, "linked": False, "notes": crm})
+    apple = person["note"]
+    out = {"ok": True, "linked": True, "apple_name": person["name"], "notes": crm, "conflict": False}
+    if apple == crm:
+        if synced != crm:
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.execute("UPDATE contacts SET notes_synced=? WHERE id=?", (crm, cid))
+        return jsonify(out)
+    apple_changed = apple != (synced or "")
+    crm_changed = crm != (synced or "")
+    if apple_changed and not crm_changed or (not crm and synced is None):
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute("UPDATE contacts SET notes=?, notes_synced=? WHERE id=?", (apple or None, apple, cid))
+        out.update(notes=apple, pulled=True)
+    elif crm_changed and not apple_changed:
+        res = write_apple_note(person["uid"], crm)
+        if res.get("ok"):
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.execute("UPDATE contacts SET notes_synced=? WHERE id=?", (crm, cid))
+            out["pushed"] = True
+        else:
+            out["push_error"] = res.get("error")
+    else:
+        out.update(conflict=True, apple_note=apple)
+    return jsonify(out)
+
+
+@app.route("/api/contacts/<int:cid>/notes", methods=["PUT"])
+def set_notes(cid: int):
+    """Save notes in the CRM and write them to the matching Apple Contacts entry."""
+    data = request.get_json(force=True)
+    text = (data.get("notes") or "").strip()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("UPDATE contacts SET notes=? WHERE id=?", (text or None, cid))
+        row = conn.execute("SELECT phone, email FROM contacts WHERE id=?", (cid,)).fetchone()
+    if not row:
+        return jsonify({"error": "not found"}), 404
+    person = find_apple_person(*row)
+    if not person:
+        return jsonify({"ok": True, "notes": text, "apple": {"ok": False, "error": "no matching Apple contact"}})
+    res = write_apple_note(person["uid"], text) if person["note"] != text else {"ok": True}
+    if res.get("ok"):
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute("UPDATE contacts SET notes_synced=? WHERE id=?", (text, cid))
+    return jsonify({"ok": True, "notes": text, "apple": res})
 
 
 _AI_CACHE = {"data": None, "ts": 0.0}

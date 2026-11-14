@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CRM</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <meta name="color-scheme" content="light dark" />
+  <link rel="stylesheet" href="/static/dark.css" />
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif; }
   </style>
@@ -191,10 +193,20 @@
               <input id="f-occupations" type="text" placeholder="e.g. Investor, Founder, Frontier lab" class="w-full px-3 py-2 rounded-lg border border-neutral-300 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400" />
             </div>
           </div>
-          <!-- Hidden but kept in DOM so JS doesn't break: email, birthday, notes -->
+          <div>
+            <div class="flex items-center justify-between mb-1">
+              <label class="block text-xs font-medium text-neutral-600">Notes <span class="text-neutral-400 font-normal">(synced with Apple Contacts)</span></label>
+              <span id="notes-status" class="text-[11px] text-neutral-400"></span>
+            </div>
+            <textarea id="f-notes" rows="3" placeholder="How you met, what they're working on, kids' names…" class="w-full px-3 py-2 rounded-lg border border-neutral-300 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400 resize-y"></textarea>
+            <div id="notes-conflict" class="hidden mt-1 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+              Apple Contacts has a different note: <span id="notes-conflict-text" class="italic whitespace-pre-wrap"></span>
+              <button type="button" id="notes-use-apple" class="ml-1 underline hover:text-amber-900">Use Apple's</button>
+            </div>
+          </div>
+          <!-- Hidden but kept in DOM so JS doesn't break: email, birthday -->
           <input id="f-email" type="hidden" />
           <input id="f-birthday" type="hidden" />
-          <input id="f-notes" type="hidden" />
           <div class="grid grid-cols-2 gap-3 pt-1">
             <div>
               <label class="block text-xs font-medium text-neutral-600 mb-1" title="Where they're going in life">Trajectory</label>
@@ -312,6 +324,55 @@
       if (_toastHide) clearTimeout(_toastHide);
       $("toast").classList.add("hidden");
     }
+
+    // ---- Undo (Cmd/Ctrl+Z) ----
+    // Each inline edit records how to revert itself. Undo replays the previous
+    // value through the same API, so the contact re-renders where it was
+    // (e.g. un-labeling an "Untagged" contact puts them back in that view).
+    const undoStack = [];
+    let undoing = false;
+    function recordUndo(label, undoFn) {
+      if (undoing) return;
+      undoStack.push({ label, undoFn });
+      if (undoStack.length > 100) undoStack.shift();
+    }
+    function contactName(id) {
+      const c = contacts.find(x => x.id === id);
+      return (c && c.name) || "contact";
+    }
+    // Optimistically set local fields, re-render, then PUT to /api/contacts/:id/:endpoint.
+    async function putContact(id, endpoint, body, local) {
+      const c = contacts.find(x => x.id === id);
+      if (c) Object.assign(c, local);
+      render();
+      const res = await fetch(`/api/contacts/${id}/${endpoint}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json().catch(() => null);
+    }
+    document.addEventListener("keydown", async (e) => {
+      if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== "z") return;
+      const ae = document.activeElement;
+      // Let text fields keep their native undo.
+      if (ae && (/^(INPUT|TEXTAREA)$/.test(ae.tagName) || ae.isContentEditable)) return;
+      if (!$("modal").classList.contains("hidden")) return;
+      e.preventDefault();
+      const entry = undoStack.pop();
+      if (!entry) { showToast("Nothing to undo"); return; }
+      undoing = true;
+      try {
+        await entry.undoFn();
+        showToast(`Undid: ${entry.label}`);
+      } catch (err) {
+        console.error("undo failed:", err);
+        showToast("Undo failed — check the server.");
+      } finally {
+        undoing = false;
+      }
+    });
 
     async function pushNameToApple(id) {
       showToast("Updating Apple Contacts…", { loading: true, duration: 0 });
@@ -712,6 +773,7 @@
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const json = await res.json();
           if (c) c.locations = json.locations || [];
+          recordUndo(`location change for ${contactName(id)}`, () => saveLocations(id, prev));
         } catch (err) {
           console.error("saveLocations failed:", err);
           if (c) c.locations = prev;
@@ -761,6 +823,8 @@
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const json = await res.json();
             c.is_service = json.is_service ? 1 : 0;
+            recordUndo(`service tag for ${contactName(id)}`, () =>
+              putContact(id, "service", { is_service: prev }, { is_service: prev ? 1 : 0 }));
           } catch (err) {
             console.error("svc toggle failed:", err);
             c.is_service = prev ? 1 : 0;
@@ -794,6 +858,7 @@
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const json = await res.json();
           if (c) c.occupations = json.occupations || [];
+          recordUndo(`label change for ${contactName(id)}`, () => saveOccupations(id, prev));
         } catch (err) {
           console.error("saveOccupations failed:", err);
           if (c) c.occupations = prev;
@@ -902,6 +967,8 @@
                 body: JSON.stringify({ [field]: next }),
               });
               if (!res.ok) throw new Error(`HTTP ${res.status}`);
+              recordUndo(`${field} for ${contactName(id)}`, () =>
+                putContact(id, field, { [field]: prev ?? null }, { [field]: prev }));
             } catch (err) {
               console.error(`${field} update failed:`, err);
               c[field] = prev;
@@ -925,6 +992,8 @@
               body: JSON.stringify({ starred: next }),
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            recordUndo(`star for ${contactName(id)}`, () =>
+              putContact(id, "star", { starred: !next }, { starred: !next }));
           } catch (err) {
             console.error("star failed:", err);
             c.starred = !next;
@@ -935,6 +1004,7 @@
         el.querySelector(".tier-btn").addEventListener("click", async (e) => {
           e.stopPropagation();
           const c = contacts.find(x => x.id === id);
+          const prevTier = c.tier ?? null;
           const next = !c.tier ? 1 : (c.tier >= 4 ? null : c.tier + 1);
           c.tier = next;  // optimistic update
           render();
@@ -943,6 +1013,8 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ tier: next }),
           });
+          recordUndo(`tier for ${contactName(id)}`, () =>
+            putContact(id, "tier", { tier: prevTier }, { tier: prevTier }));
         });
         el.querySelector(".archive-btn").addEventListener("click", async (e) => {
           e.stopPropagation();
@@ -958,6 +1030,8 @@
               body: JSON.stringify({ archived: next }),
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            recordUndo(`${next ? "archive" : "unarchive"} ${contactName(id)}`, () =>
+              putContact(id, "archive", { archived: !next }, { archived: !next }));
           } catch (err) {
             console.error("archive failed:", err);
             c.archived = !next;
@@ -993,6 +1067,10 @@
               body: JSON.stringify({ cadence_override: next || null, cadence_computed: c.cadence_computed }),
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            recordUndo(`cadence for ${contactName(id)}`, () =>
+              putContact(id, "cadence-override",
+                { cadence_override: prev.overridden ? prev.label : null, cadence_computed: c.cadence_computed },
+                { cadence_label: prev.label, cadence_overridden: prev.overridden }));
           } catch (err) {
             console.error("cadence override failed:", err);
             c.cadence_label = prev.label;
@@ -1298,6 +1376,9 @@
       $("f-trajectory").value = "";
       $("f-chemistry").value = "";
       $("f-ignore-ai").checked = false;
+      $("notes-status").textContent = "";
+      $("notes-conflict").classList.add("hidden");
+      notesLoaded = "";
       $("thread-section").classList.add("hidden");
       $("thread-bubbles").innerHTML = "";
       $("modal").classList.remove("hidden");
@@ -1326,9 +1407,48 @@
       $("f-chemistry").value = c.chemistry || "";
       $("f-ignore-ai").checked = getIgnoredAiIds().includes(c.id);
       $("modal").classList.remove("hidden");
+      notesLoaded = c.notes || "";
+      syncNotes(c);
       loadThread(c);
     }
 
+
+    // Notes text as last loaded into the modal; used to detect user edits.
+    let notesLoaded = "";
+    async function syncNotes(c) {
+      const status = $("notes-status");
+      $("notes-conflict").classList.add("hidden");
+      status.textContent = "Checking Apple Contacts…";
+      try {
+        const r = await fetch(`/api/contacts/${c.id}/notes/sync`, { method: "POST" }).then(r => r.json());
+        if (editingId !== c.id) return;  // modal moved on
+        if (!r.linked) { status.textContent = "No matching Apple contact"; return; }
+        if (r.notes !== (c.notes || "")) {
+          c.notes = r.notes || null;
+          // Only replace the textarea if the user hasn't started typing.
+          if ($("f-notes").value === notesLoaded) $("f-notes").value = r.notes || "";
+          notesLoaded = r.notes || "";
+        }
+        if (r.conflict) {
+          $("notes-conflict-text").textContent = r.apple_note;
+          $("notes-conflict").classList.remove("hidden");
+          status.textContent = "Out of sync";
+        } else if (r.push_error) {
+          status.textContent = "Couldn't update Apple Contacts";
+          status.title = r.push_error;
+        } else {
+          status.textContent = r.pulled ? "Pulled from Apple Contacts" : "In sync";
+        }
+      } catch (err) {
+        console.error("notes sync failed:", err);
+        status.textContent = "";
+      }
+    }
+    $("notes-use-apple").addEventListener("click", () => {
+      $("f-notes").value = $("notes-conflict-text").textContent;
+      $("notes-conflict").classList.add("hidden");
+      $("notes-status").textContent = "Will save Apple's note";
+    });
 
     function closeModal() {
       $("modal").classList.add("hidden");
@@ -1478,8 +1598,26 @@
       showToast("Saving…", { loading: true, duration: 0 });
       const url = editingId ? `/api/contacts/${editingId}` : "/api/contacts";
       const method = editingId ? "PUT" : "POST";
+      const notesText = payload.notes || "";
+      const notesChanged = notesText !== notesLoaded.trim();
+      if (editingId) delete payload.notes;  // saved below via /notes, which also writes to Apple
       const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const idForApple = editingId || (await res.json()).id;
+      if (idForApple && notesChanged) {
+        try {
+          const nr = await fetch(`/api/contacts/${idForApple}/notes`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ notes: notesText }),
+          }).then(r => r.json());
+          if (nr.apple && !nr.apple.ok && nr.apple.error !== "no matching Apple contact") {
+            alert(`Notes saved in the CRM, but Apple Contacts wasn't updated: ${nr.apple.error}`);
+          }
+        } catch (err) {
+          console.error("notes save failed:", err);
+          alert("Couldn't save notes — check the server.");
+        }
+      }
       hideToast();
       if (pushApple && idForApple) {
         const apple = await pushNameToApple(idForApple);
